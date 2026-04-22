@@ -1,0 +1,43 @@
+{
+  "run_started_at": "2026-04-22T09:39:39.762220+00:00",
+  "run_finished_at": "2026-04-22T09:39:39.762697+00:00",
+  "overall_passed": true,
+  "results": [
+    {
+      "format_seconds": 20,
+      "job_id": "37f0f1a9-4e43-44f8-9b79-f54d1853b934",
+      "clip_total": 2,
+      "final_status": "rendering",
+      "final_stage": "clip_2_gen",
+      "event_count": 6,
+      "event_types": [
+        "job_created",
+        "clip_1_generation_queued",
+        "clip_1_generation_started",
+        "clip_1_ready_for_approval",
+        "clip_1_approved",
+        "pipeline_resumed_after_approval"
+      ],
+      "missing_expected_events": [],
+      "passed": true
+    },
+    {
+      "format_seconds": 30,
+      "job_id": "20647dc7-9616-4cec-bf0f-b264aa747b1b",
+      "clip_total": 3,
+      "final_status": "rendering",
+      "final_stage": "clip_2_gen",
+      "event_count": 6,
+      "event_types": [
+        "job_created",
+        "clip_1_generation_queued",
+        "clip_1_generation_started",
+        "clip_1_ready_for_approval",
+        "clip_1_approved",
+        "pipeline_resumed_after_approval"
+      ],
+      "missing_expected_events": [],
+      "passed": true
+    }
+  ]
+}

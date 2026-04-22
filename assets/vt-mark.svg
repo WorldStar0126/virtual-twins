@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" fill="none">
+  <defs>
+    <linearGradient id="vt-purple" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#B57CF8"></stop>
+      <stop offset="0.55" stop-color="#9B5CF6"></stop>
+      <stop offset="1" stop-color="#6B3FD4"></stop>
+    </linearGradient>
+    <linearGradient id="vt-gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F2C97A"></stop>
+      <stop offset="0.5" stop-color="#E8B860"></stop>
+      <stop offset="1" stop-color="#B8822E"></stop>
+    </linearGradient>
+  </defs>
+  
+  <path d="M 100 168 L 58 40 L 38 40 L 38 62 L 52 62 L 74 128 L 58 72 L 38 72 L 54 22 L 92 22 L 100 42 Z" fill="url(#vt-purple)" opacity="0"></path>
+
+  
+  <g>
+    
+    <path d="&#xA;      M 100 172&#xA;      L 58 52&#xA;      L 40 72&#xA;      L 30 62&#xA;      L 56 32&#xA;      L 82 32&#xA;      L 120 140&#xA;      Z" fill="url(#vt-purple)"></path>
+    
+    <path d="&#xA;      M 100 172&#xA;      L 142 52&#xA;      L 160 72&#xA;      L 170 62&#xA;      L 144 32&#xA;      L 118 32&#xA;      L 80 140&#xA;      Z" fill="url(#vt-gold)"></path>
+  </g>
+</svg>
