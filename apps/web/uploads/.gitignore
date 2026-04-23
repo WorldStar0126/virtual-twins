@@ -1,0 +1,10 @@
+.env
+.tmp/
+output/
+credentials.json
+token.json
+__pycache__/
+*.pyc
+.venv/
+.locks/
+.pytest_cache/

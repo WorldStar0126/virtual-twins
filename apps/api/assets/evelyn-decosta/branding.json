@@ -1,0 +1,40 @@
+{
+  "schema_version": "1.0.0",
+  "slug": "evelyn-decosta",
+  "identity": {
+    "display_name": "Guaranteed Autosales",
+    "industry": "automotive",
+    "show_display_name_on_card": false
+  },
+  "contact": {
+    "phone_e164": "+14012938800",
+    "email": null,
+    "website": "guaranteedautoloansri.com",
+    "address": "920 Plainfield St, Johnston, RI 02919"
+  },
+  "social": {
+    "instagram": null,
+    "tiktok": null,
+    "facebook": null,
+    "youtube": null,
+    "linkedin": null,
+    "x": null
+  },
+  "visual": {
+    "colors": {
+      "primary":    {"hex": "#000000"},
+      "secondary":  {"hex": "#666666"},
+      "accent":     {"hex": "#000000"},
+      "background": {"hex": "#FFFFFF", "preference": "light"},
+      "foreground": {"hex": "#111111"}
+    },
+    "logo": {
+      "light_bg_path": "branding/logo_on_light.jpg",
+      "dark_bg_path":  "branding/logo_on_light.jpg"
+    }
+  },
+  "typography": {
+    "heading": {"family": "Manrope", "file_path": "../fonts/Manrope-Bold.ttf"},
+    "body":    {"family": "Inter",   "file_path": "../fonts/Inter-Medium.ttf"}
+  }
+}

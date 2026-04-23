@@ -1,9 +1,0 @@
-fastapi
-uvicorn
-pydantic
-sqlalchemy
-alembic
-psycopg[binary]
-redis
-requests
-PyJWT

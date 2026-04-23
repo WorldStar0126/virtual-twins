@@ -1,0 +1,14 @@
+fal-client
+python-dotenv
+requests
+python-multipart
+
+# End card pipeline (Phase 1)
+Pillow
+numpy
+jsonschema
+phonenumbers
+portalocker
+
+# Dev/test
+pytest

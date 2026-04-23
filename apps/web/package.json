@@ -1,0 +1,9 @@
+﻿{
+  "name": "virtual-twins-web",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Virtual Twins operator UI (static React + Babel in browser)",
+  "scripts": {
+    "dev": "npx --yes serve . -p 5173"
+  }
+}

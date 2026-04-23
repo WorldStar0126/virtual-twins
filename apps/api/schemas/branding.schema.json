@@ -1,0 +1,146 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://virtualtwins.ai/schemas/branding.schema.json",
+  "title": "Virtual Twins Client Branding",
+  "description": "Per-client branding data used to render end cards and other branded assets.",
+  "type": "object",
+  "required": ["schema_version", "slug", "identity", "contact", "social", "visual", "typography"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Semver of the schema this document conforms to."
+    },
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "description": "Lowercase alphanumeric + hyphens. Must match the containing folder name."
+    },
+    "identity": {
+      "type": "object",
+      "required": ["display_name", "industry"],
+      "additionalProperties": false,
+      "properties": {
+        "display_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "The company/brand name."
+        },
+        "industry": {
+          "type": "string",
+          "enum": ["real_estate", "title_closing", "mortgage", "insurance", "automotive", "other"]
+        },
+        "show_display_name_on_card": {
+          "type": "boolean",
+          "default": true,
+          "description": "If the logo already contains the display name, set false to avoid duplication."
+        }
+      }
+    },
+    "contact": {
+      "type": "object",
+      "required": ["phone_e164", "website"],
+      "additionalProperties": false,
+      "properties": {
+        "phone_e164": {
+          "type": "string",
+          "description": "Phone number; will be validated and stored in E.164 format."
+        },
+        "email": {
+          "type": ["string", "null"],
+          "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$",
+          "description": "Optional. Null if the client doesn't publish an email. Renderers must handle null."
+        },
+        "website": {
+          "type": "string",
+          "pattern": "^[a-z0-9.-]+\\.[a-z]{2,}(?:/[^\\s]*)?$",
+          "description": "No scheme, no trailing slash. e.g., 'example.com' or 'example.com/path'."
+        },
+        "address": {
+          "type": ["string", "null"],
+          "description": "Optional physical address (freeform single line). Used for brick-and-mortar clients like dealerships and offices."
+        }
+      }
+    },
+    "social": {
+      "type": "object",
+      "description": "Every platform is optional/nullable. Unknown platforms are ignored at render time.",
+      "additionalProperties": true,
+      "properties": {
+        "instagram": {"type": ["string", "null"]},
+        "tiktok":    {"type": ["string", "null"]},
+        "facebook":  {"type": ["string", "null"]},
+        "youtube":   {"type": ["string", "null"]},
+        "linkedin":  {"type": ["string", "null"]},
+        "x":         {"type": ["string", "null"]}
+      }
+    },
+    "visual": {
+      "type": "object",
+      "required": ["colors", "logo"],
+      "additionalProperties": false,
+      "properties": {
+        "colors": {
+          "type": "object",
+          "required": ["primary", "secondary", "accent", "background", "foreground"],
+          "additionalProperties": false,
+          "properties": {
+            "primary":    {"$ref": "#/$defs/color"},
+            "secondary":  {"$ref": "#/$defs/color"},
+            "accent":     {"$ref": "#/$defs/color"},
+            "background": {"$ref": "#/$defs/colorWithPreference"},
+            "foreground": {"$ref": "#/$defs/color"}
+          }
+        },
+        "logo": {
+          "type": "object",
+          "required": ["light_bg_path", "dark_bg_path"],
+          "additionalProperties": false,
+          "properties": {
+            "light_bg_path": {"type": "string"},
+            "dark_bg_path":  {"type": "string"}
+          }
+        }
+      }
+    },
+    "typography": {
+      "type": "object",
+      "required": ["heading", "body"],
+      "additionalProperties": false,
+      "properties": {
+        "heading": {"$ref": "#/$defs/fontRef"},
+        "body":    {"$ref": "#/$defs/fontRef"}
+      }
+    }
+  },
+  "$defs": {
+    "color": {
+      "type": "object",
+      "required": ["hex"],
+      "additionalProperties": false,
+      "properties": {
+        "hex": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}
+      }
+    },
+    "colorWithPreference": {
+      "type": "object",
+      "required": ["hex"],
+      "additionalProperties": false,
+      "properties": {
+        "hex": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
+        "preference": {"type": "string", "enum": ["light", "dark", "auto"]}
+      }
+    },
+    "fontRef": {
+      "type": "object",
+      "required": ["family", "file_path"],
+      "additionalProperties": false,
+      "properties": {
+        "family": {"type": "string", "minLength": 1},
+        "file_path": {"type": "string"}
+      }
+    }
+  }
+}

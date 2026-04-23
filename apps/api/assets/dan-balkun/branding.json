@@ -1,0 +1,39 @@
+{
+  "schema_version": "1.0.0",
+  "slug": "dan-balkun",
+  "identity": {
+    "display_name": "Balkun Title",
+    "industry": "title_closing",
+    "show_display_name_on_card": false
+  },
+  "contact": {
+    "phone_e164": "+14013699100",
+    "email": "dan@balkuntc.com",
+    "website": "balkuntc.com"
+  },
+  "social": {
+    "instagram": "balkuntc",
+    "tiktok": null,
+    "facebook": "BalkunTitleandClosing",
+    "youtube": "balkuntitleandclosing",
+    "linkedin": "balkun-title-closing",
+    "x": null
+  },
+  "visual": {
+    "colors": {
+      "primary":    {"hex": "#515153"},
+      "secondary":  {"hex": "#A09FA4"},
+      "accent":     {"hex": "#956A2D"},
+      "background": {"hex": "#FAF9F9", "preference": "light"},
+      "foreground": {"hex": "#373334"}
+    },
+    "logo": {
+      "light_bg_path": "branding/logo_on_light.png",
+      "dark_bg_path":  "branding/logo_on_light.png"
+    }
+  },
+  "typography": {
+    "heading": {"family": "Manrope", "file_path": "../fonts/Manrope-Bold.ttf"},
+    "body":    {"family": "Inter",   "file_path": "../fonts/Inter-Medium.ttf"}
+  }
+}

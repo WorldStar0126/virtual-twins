@@ -1,0 +1,38 @@
+{
+  "schema_version": "1.0.0",
+  "slug": "test-client",
+  "identity": {
+    "display_name": "Example Realty Co",
+    "industry": "real_estate"
+  },
+  "contact": {
+    "phone_e164": "+12025550123",
+    "email": "hello@example.com",
+    "website": "example.com"
+  },
+  "social": {
+    "instagram": "examplerealty",
+    "tiktok": null,
+    "facebook": "examplerealtyco",
+    "youtube": "@examplerealty",
+    "linkedin": null,
+    "x": null
+  },
+  "visual": {
+    "colors": {
+      "primary":    {"hex": "#0B3D2E"},
+      "secondary":  {"hex": "#C9A96E"},
+      "accent":     {"hex": "#E63946"},
+      "background": {"hex": "#FAF7F2", "preference": "light"},
+      "foreground": {"hex": "#121212"}
+    },
+    "logo": {
+      "light_bg_path": "logo.png",
+      "dark_bg_path":  "logo.png"
+    }
+  },
+  "typography": {
+    "heading": {"family": "Manrope",  "file_path": "../../fonts/Manrope-Bold.ttf"},
+    "body":    {"family": "Inter",    "file_path": "../../fonts/Inter-Medium.ttf"}
+  }
+}

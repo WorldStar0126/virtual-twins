@@ -1,0 +1,38 @@
+{
+  "schema_version": "1.0.0",
+  "slug": "minimal-client",
+  "identity": {
+    "display_name": "Minimal Brand LLC",
+    "industry": "other"
+  },
+  "contact": {
+    "phone_e164": "+17035550199",
+    "email": "hi@minimalbrand.example",
+    "website": "minimalbrand.example"
+  },
+  "social": {
+    "instagram": null,
+    "tiktok": null,
+    "facebook": null,
+    "youtube": null,
+    "linkedin": null,
+    "x": null
+  },
+  "visual": {
+    "colors": {
+      "primary":    {"hex": "#1A1A1A"},
+      "secondary":  {"hex": "#6A6A6A"},
+      "accent":     {"hex": "#999999"},
+      "background": {"hex": "#FFFFFF", "preference": "light"},
+      "foreground": {"hex": "#111111"}
+    },
+    "logo": {
+      "light_bg_path": "logo.png",
+      "dark_bg_path":  "logo.png"
+    }
+  },
+  "typography": {
+    "heading": {"family": "Manrope",  "file_path": "../../fonts/Manrope-Bold.ttf"},
+    "body":    {"family": "Inter",    "file_path": "../../fonts/Inter-Medium.ttf"}
+  }
+}

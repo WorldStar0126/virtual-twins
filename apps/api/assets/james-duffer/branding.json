@@ -1,0 +1,39 @@
+{
+  "schema_version": "1.0.0",
+  "slug": "james-duffer",
+  "identity": {
+    "display_name": "Rise Real Estate Consultants",
+    "industry": "real_estate",
+    "show_display_name_on_card": false
+  },
+  "contact": {
+    "phone_e164": "+14013586563",
+    "email": "info@riserec.com",
+    "website": "riserec.com"
+  },
+  "social": {
+    "instagram": "riserec",
+    "tiktok": null,
+    "facebook": "riserec",
+    "youtube": "riserec",
+    "linkedin": null,
+    "x": null
+  },
+  "visual": {
+    "colors": {
+      "primary":    {"hex": "#000000"},
+      "secondary":  {"hex": "#666666"},
+      "accent":     {"hex": "#000000"},
+      "background": {"hex": "#FFFFFF", "preference": "light"},
+      "foreground": {"hex": "#111111"}
+    },
+    "logo": {
+      "light_bg_path": "branding/logo_on_light.png",
+      "dark_bg_path":  "branding/logo_on_light.png"
+    }
+  },
+  "typography": {
+    "heading": {"family": "Manrope", "file_path": "../fonts/Manrope-Bold.ttf"},
+    "body":    {"family": "Inter",   "file_path": "../fonts/Inter-Medium.ttf"}
+  }
+}
