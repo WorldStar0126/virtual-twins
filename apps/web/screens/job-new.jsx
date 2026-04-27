@@ -1,17 +1,17 @@
 // New video job setup — pick client, format, prompt UX (with 3 prompt UX options)
 const { useState: useStateN, useEffect: useEffectN } = React;
 
-function StepChip({ n, active, done, label }) {
-  return <div style={{display:'flex', alignItems:'center', gap:10, opacity: active||done?1:0.5}}>
+function StepChip({ n, active, done, alert, label }) {
+  return <div style={{display:'flex', alignItems:'center', gap:10, opacity: active||done||alert?1:0.5}}>
     <div style={{
       width:26, height:26, borderRadius:13,
-      background: done? VT.gradBrand : active? 'rgba(155,92,246,0.15)' : VT.bg4,
-      border: `1px solid ${done?'transparent': active?'rgba(155,92,246,0.5)':VT.line}`,
+      background: done ? VT.gradBrand : alert ? 'rgba(240,101,113,0.16)' : active ? 'rgba(155,92,246,0.15)' : VT.bg4,
+      border: `1px solid ${done ? 'transparent' : alert ? 'rgba(240,101,113,0.55)' : active ? 'rgba(155,92,246,0.5)' : VT.line}`,
       display:'flex', alignItems:'center', justifyContent:'center',
-      fontSize:11, fontWeight:700, color: done?'#0E0F13': active?'#B57CF8':VT.textDim,
+      fontSize:11, fontWeight:700, color: done ? '#0E0F13' : alert ? '#F06571' : active ? '#B57CF8' : VT.textDim,
       fontFamily: VT.display,
-    }}>{done ? <IC.check width={12} height={12}/> : n}</div>
-    <span style={{fontSize:12, fontWeight: active?600:500, color: active?VT.text: VT.textDim}}>{label}</span>
+    }}>{done ? <IC.check width={12} height={12}/> : alert ? <IC.warn width={12} height={12}/> : n}</div>
+    <span style={{fontSize:12, fontWeight: active||alert?600:500, color: alert?'#F06571': active?VT.text: VT.textDim}}>{label}</span>
   </div>;
 }
 
@@ -39,7 +39,7 @@ function JobNew({ nav, clients = [], creatingJob = false, onCreateJob }) {
   const [assetsLoading, setAssetsLoading] = useStateN(false);
   const [assetRows, setAssetRows] = useStateN({ images: [], audio: [] });
   const [submitError, setSubmitError] = useStateN("");
-  const [submitAttempted, setSubmitAttempted] = useStateN(false);
+  const [stepAlertPulse, setStepAlertPulse] = useStateN(false);
 
   useEffectN(() => {
     if (!client && clients.length > 0) setClient(clients[0]);
@@ -88,12 +88,19 @@ function JobNew({ nav, clients = [], creatingJob = false, onCreateJob }) {
   const hasPhotoRef = selectedImgs.length > 0;
   const hasAudioRef = selectedAudio.length > 0;
   const canGenerate = isClientValid && isPromptValid && hasPhotoRef;
-  const validationNotes = [
-    !isClientValid ? "Select a client in Step 1." : null,
-    !isPromptValid ? "Enter a prompt in Step 3." : null,
-    !hasPhotoRef ? "Select at least one photo reference in Step 4." : null,
-  ].filter(Boolean);
-
+  const isStep1Done = isClientValid && Boolean(format);
+  const isStep2Done = isPromptValid; // template is optional
+  const isStep3Done = hasPhotoRef; // audio is optional
+  const isStep4Done = canGenerate;
+  const showStepAlerts = stepAlertPulse && !canGenerate;
+  const dismissStepAlerts = () => {
+    if (stepAlertPulse) setStepAlertPulse(false);
+  };
+  const firstIncompleteStep =
+    !isStep1Done ? 1 :
+    !isStep2Done ? 2 :
+    !isStep3Done ? 3 :
+    !isStep4Done ? 4 : 4;
   const streamJobEventsToConsole = (jobId) => {
     if (!api?.getEvents || !jobId) return;
     const seen = new Set();
@@ -117,7 +124,12 @@ function JobNew({ nav, clients = [], creatingJob = false, onCreateJob }) {
     }, 3000);
   };
 
-  return <div style={{padding:'24px 28px', maxWidth:1480, margin:'0 auto'}}>
+  return <div
+    style={{padding:'24px 28px', maxWidth:1480, margin:'0 auto'}}
+    onMouseDownCapture={dismissStepAlerts}
+    onKeyDownCapture={dismissStepAlerts}
+    onInputCapture={dismissStepAlerts}
+  >
     {/* Header */}
     <div style={{display:'flex', alignItems:'center', gap:12, marginBottom:20}}>
       <Btn variant="subtle" icon="chev" onClick={()=>nav('dashboard')} style={{transform:'rotate(180deg)', paddingLeft:8}}/>
@@ -132,10 +144,10 @@ function JobNew({ nav, clients = [], creatingJob = false, onCreateJob }) {
           variant="primary"
           icon="bolt"
           onClick={async ()=>{
-            setSubmitAttempted(true);
             if (!onCreateJob) return;
             if (!canGenerate) {
-              setSubmitError(validationNotes.join(" "));
+              setStepAlertPulse(true);
+              setSubmitError("");
               return;
             }
             try {
@@ -178,13 +190,13 @@ function JobNew({ nav, clients = [], creatingJob = false, onCreateJob }) {
 
     {/* Stepper */}
     <div style={{display:'flex', gap:26, alignItems:'center', marginBottom:22, paddingBottom:18, borderBottom:`1px solid ${VT.line}`}}>
-      <StepChip n={1} label="Client & format" active done/>
+      <StepChip n={1} label="Client & format" active={firstIncompleteStep===1 && !isStep1Done} done={isStep1Done} alert={showStepAlerts && !isStep1Done}/>
       <div style={{width:24, height:1, background:VT.line}}/>
-      <StepChip n={2} label="Template & prompt" active/>
+      <StepChip n={2} label="Template & prompt" active={firstIncompleteStep===2 && !isStep2Done} done={isStep2Done} alert={showStepAlerts && !isStep2Done}/>
       <div style={{width:24, height:1, background:VT.line}}/>
-      <StepChip n={3} label="References" active/>
+      <StepChip n={3} label="References" active={firstIncompleteStep===3 && !isStep3Done} done={isStep3Done} alert={showStepAlerts && !isStep3Done}/>
       <div style={{width:24, height:1, background:VT.line}}/>
-      <StepChip n={4} label="Review & fire"/>
+      <StepChip n={4} label="Review & fire" active={firstIncompleteStep===4 && !isStep4Done} done={isStep4Done} alert={showStepAlerts && !isStep4Done}/>
     </div>
 
     <div style={{display:'grid', gridTemplateColumns:'1fr 360px', gap:20, alignItems:'flex-start'}}>
@@ -214,7 +226,6 @@ function JobNew({ nav, clients = [], creatingJob = false, onCreateJob }) {
                   </div>
                 )}
               </div>
-              {submitAttempted && !isClientValid && <div style={{fontSize:11, color:'#F06571', marginTop:8}}>Please select a client.</div>}
             </div>
 
             {/* Format picker */}
@@ -367,7 +378,6 @@ function JobNew({ nav, clients = [], creatingJob = false, onCreateJob }) {
               </div>
             </div>
           )}
-          {submitAttempted && !isPromptValid && <div style={{fontSize:11, color:'#F06571', marginTop:10}}>Please enter a prompt (freeform or structured fields).</div>}
         </Panel>
       </div>
 
@@ -397,8 +407,6 @@ function JobNew({ nav, clients = [], creatingJob = false, onCreateJob }) {
             })}
           </div>
           {!assetsLoading && assetRows.images.length===0 && <div style={{fontSize:11, color:VT.textMuted, marginTop:8}}>No photos available for this client yet.</div>}
-          {submitAttempted && !hasPhotoRef && <div style={{fontSize:11, color:'#F06571', marginTop:8}}>Please select at least one photo reference.</div>}
-
           <div style={{marginTop:14, padding:10, background: VT.bg4, borderRadius:8, fontSize:11, color: VT.textDim, display:'flex', alignItems:'center', gap:8}}>
             <IC.bolt width={13} height={13} style={{color:'#E8B860'}}/>
             <span>Suggested by model: <b style={{color:VT.text}}>front, L profile, R profile, full body</b></span>

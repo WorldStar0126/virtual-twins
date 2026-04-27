@@ -13,6 +13,34 @@ function getApiBase() {
 
 const VT_API_BASE = getApiBase();
 
+function formatApiErrorDetail(detail, fallback) {
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    const joined = detail
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (item && typeof item === "object") {
+          const loc = Array.isArray(item.loc) ? item.loc.join(".") : "";
+          const msg = item.msg || item.message || "";
+          return [loc, msg].filter(Boolean).join(": ");
+        }
+        return "";
+      })
+      .filter(Boolean)
+      .join("; ");
+    if (joined) return joined;
+  }
+  if (detail && typeof detail === "object") {
+    if (typeof detail.message === "string") return detail.message;
+    try {
+      return JSON.stringify(detail);
+    } catch (err) {
+      // fall through
+    }
+  }
+  return fallback;
+}
+
 async function request(path, init) {
   const controller = new AbortController();
   const timeoutMs = Number(localStorage.getItem("vt_api_timeout_ms") || 30000);
@@ -36,7 +64,7 @@ async function request(path, init) {
     let detail = `HTTP ${res.status}`;
     try {
       const payload = await res.json();
-      detail = payload?.detail || payload?.message || detail;
+      detail = formatApiErrorDetail(payload?.detail ?? payload?.message, detail);
     } catch (err) {
       // Keep generic detail when body is not JSON.
     }
@@ -71,7 +99,39 @@ const Api = {
         let detail = `HTTP ${res.status}`;
         try {
           const payload = await res.json();
-          detail = payload?.detail || payload?.message || detail;
+          detail = formatApiErrorDetail(payload?.detail ?? payload?.message, detail);
+        } catch (err) {}
+        throw new Error(detail);
+      }
+      return res.json();
+    } catch (err) {
+      if (err?.name === "AbortError") {
+        throw new Error(`API timeout after ${timeoutMs}ms at ${VT_API_BASE}`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  },
+  uploadEndCard: async (clientSlug, title, file) => {
+    const form = new FormData();
+    form.append("asset_type", "end_card");
+    form.append("title", title || "");
+    form.append("file", file);
+    const controller = new AbortController();
+    const timeoutMs = Number(localStorage.getItem("vt_api_timeout_ms") || 30000);
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(`${VT_API_BASE}/v1/clients/${clientSlug}/assets/upload`, {
+        method: "POST",
+        body: form,
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        let detail = `HTTP ${res.status}`;
+        try {
+          const payload = await res.json();
+          detail = formatApiErrorDetail(payload?.detail ?? payload?.message, detail);
         } catch (err) {}
         throw new Error(detail);
       }
@@ -108,10 +168,14 @@ const Api = {
     request(`/v1/jobs/${jobId}/stop`, {
       method: "POST",
     }),
-  assembleJob: (jobId, endCardId = null) =>
+  assembleJob: (jobId, endCardId = null, options = {}) =>
     request(`/v1/jobs/${jobId}/assemble`, {
       method: "POST",
-      body: JSON.stringify({ end_card_id: endCardId }),
+      body: JSON.stringify({
+        end_card_id: endCardId,
+        seam_type: options?.seamType || "crossfade",
+        xfade_ms: Number(options?.xfadeMs ?? 400),
+      }),
     }),
 };
 
@@ -212,10 +276,10 @@ function useOperatorData(pollMs = 5000) {
     }
   }, []);
 
-  const assembleJob = useCallbackApi(async (jobId, endCardId = null) => {
+  const assembleJob = useCallbackApi(async (jobId, endCardId = null, options = {}) => {
     setActingOnJob(true);
     try {
-      const updated = normalizeJob(await Api.assembleJob(jobId, endCardId));
+      const updated = normalizeJob(await Api.assembleJob(jobId, endCardId, options));
       setJobs((prev) => prev.map((j) => (j.id === jobId ? updated : j)));
       setConnected(true);
       return updated;

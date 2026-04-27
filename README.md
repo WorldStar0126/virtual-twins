@@ -10,15 +10,14 @@ This project has:
 virtual-twins-monorepo/
 |- apps/
 |  |- api/        # backend API, generation tools, workflows, tests
-|  `- web/        # frontend operator UI
+|  |- web/        # frontend operator UI
 |- packages/      # reserved for shared code
 |- package.json   # npm workspace root
-`- README.md
+|- README.md
 ```
 
 ## Requirements
 
-- Node.js 18+
 - Python 3.11+
 - ffmpeg and ffprobe available in PATH (required for video splice/assembly)
 

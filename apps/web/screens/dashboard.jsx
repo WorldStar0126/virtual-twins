@@ -100,9 +100,7 @@ function Dashboard({ nav, clients = [], jobs = [], loading = false, error = null
         <div style={{fontSize:11, color: VT.textMuted, letterSpacing:1.5, textTransform:'uppercase', fontWeight:600, marginBottom:6}}>Operator Studio</div>
         <div style={{fontFamily: VT.display, fontSize:30, fontWeight:600, color: VT.text, letterSpacing:-0.5}}>Good morning, Adam.</div>
         <div style={{fontSize:13, color: VT.textDim, marginTop:4}}>You have <b style={{color:'#F2C97A'}}>{needsApproval.length} clip{needsApproval.length===1?'':'s'}</b> awaiting approval and <b style={{color:'#7CA7FF'}}>{rendering.length} rendering</b>. {failed.length>0 && <>· <b style={{color:'#F06571'}}>{failed.length} failed</b></>}</div>
-        <div style={{fontSize:11, color: error ? '#F06571' : VT.textMuted, marginTop:6}}>
-          {loading ? 'Syncing backend...' : connected ? 'Connected to live backend' : (error || 'Using offline data')}
-        </div>
+        {error && <div style={{fontSize:11, color:'#F06571', marginTop:6}}>{error}</div>}
       </div>
       <Btn variant="primary" icon="plus" size="lg" onClick={()=>nav('job-new')}>New video job</Btn>
     </div>

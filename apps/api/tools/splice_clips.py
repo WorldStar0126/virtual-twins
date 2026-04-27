@@ -42,26 +42,90 @@ def video_duration_seconds(video_path: Path) -> float:
     return float(r.stdout.strip())
 
 
-def splice_reencode(clip_paths, output_path: Path, seam_fade_ms: int = 50):
-    """Robust concat via ffmpeg concat filter. Re-encodes; works with mismatched params.
+def has_audio_stream(video_path: Path) -> bool:
+    """Return True when input has an audio stream."""
+    r = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=codec_type",
+            "-of",
+            "csv=p=0",
+            str(video_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return bool((r.stdout or "").strip())
 
-    Applies a brief audio fade-out/fade-in at each seam (default 50ms) to eliminate
-    waveform-discontinuity pops. Video stays hard-cut. Full duration is preserved.
+
+def splice_reencode(
+    clip_paths: list[Path],
+    output_path: Path,
+    seam_fade_ms: int = 50,
+    seam_type: str = "hard cut",
+    xfade_ms: int = 400,
+) -> None:
+    """Robust concat via ffmpeg. Re-encodes; works with mismatched params.
     """
-    inputs = []
+    inputs: list[str] = []
     for p in clip_paths:
         inputs.extend(["-i", str(p)])
 
     n = len(clip_paths)
-    fade_s = seam_fade_ms / 1000.0
+    fade_s = max(0.0, seam_fade_ms / 1000.0)
+    xfade_s = max(0.0, xfade_ms / 1000.0)
+    seam = (seam_type or "hard cut").strip().lower()
+    durations = [video_duration_seconds(p) for p in clip_paths]
 
-    if seam_fade_ms <= 0 or n == 1:
-        filter_parts = [f"[{i}:v][{i}:a]" for i in range(n)]
-        filter_complex = "".join(filter_parts) + f"concat=n={n}:v=1:a=1[outv][outa]"
+    audio_labels: list[str] = []
+    prep_parts: list[str] = []
+    for i, p in enumerate(clip_paths):
+        if has_audio_stream(p):
+            audio_labels.append(f"[{i}:a]")
+        else:
+            silent_label = f"[asil{i}]"
+            prep_parts.append(
+                f"anullsrc=channel_layout=stereo:sample_rate=44100,atrim=duration={durations[i]:.6f},asetpts=N/SR/TB{silent_label}"
+            )
+            audio_labels.append(silent_label)
+
+    if n == 1:
+        filter_complex = ";".join([*prep_parts, f"[0:v]{audio_labels[0]}concat=n=1:v=1:a=1[outv][outa]"])
+    elif seam in {"crossfade", "dip to black"} and xfade_s > 0:
+        parts = [*prep_parts]
+        transition = "fade" if seam == "crossfade" else "fadeblack"
+        vcur = "[0:v]"
+        accumulated = durations[0]
+        for i in range(1, n):
+            vo = f"[vx{i}]"
+            offset = max(0.0, accumulated - xfade_s)
+            parts.append(
+                f"{vcur}[{i}:v]xfade=transition={transition}:duration={xfade_s:.6f}:offset={offset:.6f}{vo}"
+            )
+            vcur = vo
+            accumulated += durations[i] - xfade_s
+
+        acur = audio_labels[0]
+        for i in range(1, n):
+            ao = f"[ax{i}]"
+            parts.append(f"{acur}{audio_labels[i]}acrossfade=d={xfade_s:.6f}{ao}")
+            acur = ao
+
+        parts.append(f"{vcur}setpts=PTS[outv]")
+        parts.append(f"{acur}anull[outa]")
+        filter_complex = ";".join(parts)
+    elif seam_fade_ms <= 0:
+        filter_parts = [f"[{i}:v]{audio_labels[i]}" for i in range(n)]
+        concat_part = "".join(filter_parts) + f"concat=n={n}:v=1:a=1[outv][outa]"
+        filter_complex = ";".join([*prep_parts, concat_part])
     else:
-        durations = [video_duration_seconds(p) for p in clip_paths]
         parts = ["".join(f"[{i}:v]" for i in range(n)) + f"concat=n={n}:v=1:a=0[outv]"]
-        audio_labels = []
         for i in range(n):
             filters = []
             if i > 0:
@@ -70,18 +134,17 @@ def splice_reencode(clip_paths, output_path: Path, seam_fade_ms: int = 50):
                 filters.append(f"afade=t=out:st={durations[i] - fade_s}:d={fade_s}")
             if filters:
                 label = f"[a{i}]"
-                parts.append(f"[{i}:a]{','.join(filters)}{label}")
-                audio_labels.append(label)
-            else:
-                audio_labels.append(f"[{i}:a]")
+                parts.append(f"{audio_labels[i]}{','.join(filters)}{label}")
+                audio_labels[i] = label
         parts.append("".join(audio_labels) + f"concat=n={n}:v=0:a=1[outa]")
-        filter_complex = ";".join(parts)
+        filter_complex = ";".join([*prep_parts, *parts])
 
     subprocess.run(
         ["ffmpeg", "-y", *inputs,
          "-filter_complex", filter_complex,
          "-map", "[outv]", "-map", "[outa]",
          "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+         "-pix_fmt", "yuv420p",
          "-c:a", "aac", "-b:a", "192k",
          str(output_path)],
         check=True,
@@ -95,6 +158,8 @@ def main():
     parser.add_argument("--output", default=None, help="Output filename (default: spliced_{timestamp}.mp4)")
     parser.add_argument("--reencode", action="store_true", help="Use concat filter (re-encodes; slower but more robust)")
     parser.add_argument("--seam-fade-ms", type=int, default=50, help="Audio fade duration at each seam (ms). Set 0 to disable. Only applies with --reencode (default 50)")
+    parser.add_argument("--seam-type", default="hard cut", choices=["hard cut", "crossfade", "dip to black"], help="Seam transition mode for final assembly")
+    parser.add_argument("--xfade-ms", type=int, default=400, help="Seam transition duration in ms for crossfade/dip to black")
     args = parser.parse_args()
 
     client_dir = OUTPUT_DIR / args.client
@@ -117,7 +182,13 @@ def main():
 
     try:
         if args.reencode:
-            splice_reencode(clip_paths, output_path, seam_fade_ms=args.seam_fade_ms)
+            splice_reencode(
+                clip_paths,
+                output_path,
+                seam_fade_ms=args.seam_fade_ms,
+                seam_type=args.seam_type,
+                xfade_ms=args.xfade_ms,
+            )
         else:
             splice_demuxer(clip_paths, output_path)
     except subprocess.CalledProcessError as e:

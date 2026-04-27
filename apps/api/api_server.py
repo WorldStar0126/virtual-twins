@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -15,7 +16,6 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from tools.download_video import download_video
-from tools.generate_end_card import render as render_end_card
 from tools.generate_video import generate_video
 from tools.splice_clips import splice_reencode
 from tools.upload_assets import upload_client_assets
@@ -48,6 +48,213 @@ def output_local_url(path: Path | str | None) -> str | None:
     return f"/output-files/{rel.as_posix()}"
 
 
+def media_duration_seconds(path: Path) -> float:
+    probe = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return max(0.0, float((probe.stdout or "0").strip() or 0.0))
+
+
+def has_audio_stream(path: Path) -> bool:
+    probe = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=codec_type",
+            "-of",
+            "csv=p=0",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return bool((probe.stdout or "").strip())
+
+
+def estimate_audio_speed(path: Path) -> float:
+    """Estimate speaking pace factor from speech activity ratio."""
+    if not has_audio_stream(path):
+        return 0.0
+    total = media_duration_seconds(path)
+    if total <= 0:
+        return 0.0
+    detect = subprocess.run(
+        [
+            "ffmpeg",
+            "-v",
+            "info",
+            "-i",
+            str(path),
+            "-af",
+            "silencedetect=noise=-30dB:d=0.20",
+            "-f",
+            "null",
+            "-",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    silence_total = 0.0
+    for m in re.finditer(r"silence_duration:\s*([0-9.]+)", detect.stderr or ""):
+        silence_total += float(m.group(1))
+    speaking_ratio = max(0.0, min(1.0, (total - silence_total) / total))
+    # 1.0 ~= typical speaking density; below/above means slower/faster perceived pace.
+    # Keep a floor to avoid extreme underestimation, but allow faster clips to show
+    # more separation in UI instead of flattening at 1.40x.
+    pace_factor = speaking_ratio / 0.55
+    return round(max(0.6, min(2.0, pace_factor)), 2)
+
+
+def build_atempo_filter(speed_factor: float) -> str:
+    """Build ffmpeg atempo chain for any positive speed factor."""
+    factor = max(0.01, float(speed_factor))
+    parts: list[str] = []
+    while factor < 0.5:
+        parts.append("atempo=0.5")
+        factor /= 0.5
+    while factor > 2.0:
+        parts.append("atempo=2.0")
+        factor /= 2.0
+    parts.append(f"atempo={factor:.6f}")
+    return ",".join(parts)
+
+
+def retime_clip_av(input_path: Path, output_path: Path, audio_speed_factor: float, video_pts_factor: float) -> None:
+    """Retime both audio and video to preserve sync."""
+    af = build_atempo_filter(audio_speed_factor)
+    vf = f"setpts={video_pts_factor:.6f}*PTS"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(input_path),
+            "-vf",
+            vf,
+            "-af",
+            af,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "medium",
+            "-crf",
+            "18",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            str(output_path),
+        ],
+        check=True,
+    )
+
+
+def render_seam_preview(
+    clip1_path: Path,
+    clip2_path: Path,
+    output_path: Path,
+    seam_type: Literal["hard cut", "crossfade", "dip to black"] = "crossfade",
+    seam_ms: int = 400,
+) -> None:
+    """Create seam preview according to selected seam style."""
+    seam_s = max(0.05, min(2.5, float(seam_ms) / 1000.0))
+    if seam_type == "hard cut":
+        raise ValueError("hard cut does not require seam preview generation")
+    if seam_type == "crossfade":
+        window_s = max(0.6, seam_s + 0.5)
+        offset_s = max(0.0, window_s - seam_s)
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-sseof",
+                f"-{window_s:.3f}",
+                "-t",
+                f"{window_s:.3f}",
+                "-i",
+                str(clip1_path),
+                "-t",
+                f"{window_s:.3f}",
+                "-i",
+                str(clip2_path),
+                "-filter_complex",
+                (
+                    "[0:v]setpts=PTS-STARTPTS[v0];"
+                    "[1:v]setpts=PTS-STARTPTS[v1];"
+                    f"[v0][v1]xfade=transition=fade:duration={seam_s:.3f}:offset={offset_s:.3f}[outv]"
+                ),
+                "-map",
+                "[outv]",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "medium",
+                "-crf",
+                "18",
+                str(output_path),
+            ],
+            check=True,
+        )
+        return
+    # dip to black
+    side_s = max(0.3, seam_s)
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-sseof",
+            f"-{side_s:.3f}",
+            "-t",
+            f"{side_s:.3f}",
+            "-i",
+            str(clip1_path),
+            "-t",
+            f"{side_s:.3f}",
+            "-i",
+            str(clip2_path),
+            "-filter_complex",
+            (
+                f"[0:v]trim=duration={side_s:.3f},setpts=PTS-STARTPTS,setsar=1[v0];"
+                f"[1:v]trim=duration={side_s:.3f},setpts=PTS-STARTPTS,setsar=1[v1];"
+                f"color=c=black:s=64x64:d={seam_s:.3f}[blk];"
+                "[blk][v0]scale2ref[blkfit][v0ref];"
+                "[v0ref]setsar=1[v0fix];"
+                "[blkfit]setsar=1[blkfix];"
+                "[v1]setsar=1[v1fix];"
+                "[v0fix][blkfix][v1fix]concat=n=3:v=1:a=0,format=yuv420p[outv]"
+            ),
+            "-map",
+            "[outv]",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "medium",
+            "-crf",
+            "18",
+            str(output_path),
+        ],
+        check=True,
+    )
+
+
 class JobCreateRequest(BaseModel):
     client_slug: str
     prompt: str = Field(min_length=10)
@@ -67,6 +274,8 @@ class ApprovalRequest(BaseModel):
 
 class AssembleRequest(BaseModel):
     end_card_id: str | None = None
+    seam_type: Literal["hard cut", "crossfade", "dip to black"] = "crossfade"
+    xfade_ms: int = 400
 
 
 class AppState:
@@ -142,8 +351,12 @@ class AppState:
 
         photos_dir = client_dir / "photos"
         audio_dir = client_dir / "audio"
+        videos_dir = client_dir / "videos"
+        end_cards_dir = client_dir / "end_cards"
         image_files = sorted([p.name for p in photos_dir.glob("*") if p.is_file()]) if photos_dir.exists() else []
         audio_files = sorted([p.name for p in audio_dir.glob("*") if p.is_file()]) if audio_dir.exists() else []
+        video_files = sorted([p.name for p in videos_dir.glob("*") if p.is_file()]) if videos_dir.exists() else []
+        end_card_files = sorted([p.name for p in end_cards_dir.glob("*") if p.is_file()]) if end_cards_dir.exists() else []
 
         cache_path = TMP_DIR / f"{client_slug}{URL_CACHE_SUFFIX}"
         cache_images: list[dict[str, Any]] = []
@@ -177,6 +390,24 @@ class AppState:
             }
             for idx, name in enumerate(audio_files)
         ]
+        videos = [
+            {
+                "index": idx + 1,
+                "file": name,
+                "local_url": f"/assets-files/{client_slug}/videos/{name}",
+            }
+            for idx, name in enumerate(video_files)
+        ]
+        end_cards = [
+            {
+                "index": idx + 1,
+                "id": Path(name).stem,
+                "title": Path(name).stem.replace("_", " ").replace("-", " ").strip().title(),
+                "file": name,
+                "local_url": f"/assets-files/{client_slug}/end_cards/{name}",
+            }
+            for idx, name in enumerate(end_card_files)
+        ]
         branding_path = client_dir / "branding.json"
         branding: dict[str, Any] | None = None
         if branding_path.exists():
@@ -200,6 +431,8 @@ class AppState:
             "client": client_slug,
             "images": images,
             "audio": audio,
+            "videos": videos,
+            "end_cards": end_cards,
             "branding": branding,
             "cache_available": cache_path.exists(),
         }
@@ -472,7 +705,7 @@ class AppState:
                 )
                 threading.Thread(target=self._run_clip_n, args=(job_id, next_idx), daemon=True).start()
             else:
-                self._update_job(job_id, status="awaiting_assembly", stage="assembly_review")
+                self._update_job(job_id, status="queued", stage="assembly_review")
                 self.add_event(job_id, f"clip_{clip_idx}.approved", "Final clip approved; ready for assembly", {"note": payload.note})
         else:
             self._update_job(job_id, status="failed", stage="stopped_by_rejection")
@@ -507,7 +740,7 @@ class AppState:
 
     def assemble(self, job_id: str, payload: AssembleRequest) -> dict[str, Any]:
         job = self.get_job(job_id)
-        if job["status"] not in {"awaiting_assembly", "done"}:
+        if job["status"] not in {"queued", "awaiting_assembly", "done"}:
             raise HTTPException(status_code=400, detail="Job is not ready for assembly yet.")
         client_slug = str(job.get("client") or "").strip()
         if not client_slug:
@@ -520,7 +753,7 @@ class AppState:
         for file_path in job_dir.glob("*.mp4"):
             if not file_path.is_file():
                 continue
-            match = re.match(r"^clip(?:_number)?_(\d+)_.*\.mp4$", file_path.name)
+            match = re.match(r"^clip(?:_number)?_(\d+)(?:_.*)?\.mp4$", file_path.name)
             if not match:
                 continue
             clip_rows.append((int(match.group(1)), file_path))
@@ -529,25 +762,103 @@ class AppState:
         if not clip_paths:
             raise HTTPException(status_code=400, detail="No generated clips found for assembly")
 
-        assemble_inputs = list(clip_paths)
-        end_card_path: Path | None = None
+        adjusted_clip_paths = list(clip_paths)
+        adjusted_temp_files: list[Path] = []
+        speed_adjustments: list[dict[str, Any]] = []
+        speed_by_clip: dict[int, float] = {}
+        for i, clip_path in enumerate(clip_paths, start=1):
+            if not has_audio_stream(clip_path):
+                continue
+            clip_speed = estimate_audio_speed(clip_path)
+            if clip_speed > 0:
+                speed_by_clip[i] = clip_speed
+
+        total_speed = round(sum(speed_by_clip.values()) / len(speed_by_clip), 4) if speed_by_clip else 0.0
+        # Normalize only when clips differ materially from the average pace.
+        normalize_threshold = 0.05
+        max_rel_delta = max((abs((s / total_speed) - 1.0) for s in speed_by_clip.values()), default=0.0) if total_speed > 0 else 0.0
+        should_normalize = total_speed > 0 and max_rel_delta > normalize_threshold
+
+        if should_normalize:
+            for i, clip_path in enumerate(clip_paths, start=1):
+                clip_speed = speed_by_clip.get(i)
+                if not clip_speed:
+                    continue
+                audio_atempo_factor = total_speed / clip_speed
+                video_setpts_factor = clip_speed / total_speed
+                if abs(audio_atempo_factor - 1.0) < 0.01:
+                    continue
+                retimed_path = job_dir / f"_assembly_retime_clip_{i}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.mp4"
+                retime_clip_av(
+                    clip_path,
+                    retimed_path,
+                    audio_speed_factor=audio_atempo_factor,
+                    video_pts_factor=video_setpts_factor,
+                )
+                adjusted_clip_paths[i - 1] = retimed_path
+                adjusted_temp_files.append(retimed_path)
+                speed_adjustments.append(
+                    {
+                        "clip": i,
+                        "from_speed": clip_speed,
+                        "to_speed_target": total_speed,
+                        "atempo_factor": round(audio_atempo_factor, 4),
+                        "setpts_factor": round(video_setpts_factor, 4),
+                        "output_file": retimed_path.name,
+                    }
+                )
+
+        assemble_inputs = list(adjusted_clip_paths)
+        selected_end_card_path: Path | None = None
         if payload.end_card_id:
-            branding_path = ASSETS_DIR / client_slug / "branding.json"
-            if not branding_path.exists():
-                raise HTTPException(status_code=400, detail=f"Branding file not found for client: {client_slug}")
-            safe_end_card_id = re.sub(r"[^a-zA-Z0-9_-]+", "-", payload.end_card_id).strip("-") or "selected"
-            end_card_path = job_dir / f"end_card_{safe_end_card_id}.mp4"
-            try:
-                render_end_card(source=branding_path, out_path=end_card_path)
-            except Exception as exc:  # noqa: BLE001
-                raise HTTPException(status_code=500, detail=f"End card generation failed: {exc}") from exc
-            assemble_inputs.append(end_card_path)
+            end_cards_dir = ASSETS_DIR / client_slug / "end_cards"
+            if not end_cards_dir.exists():
+                raise HTTPException(status_code=400, detail=f"End cards folder not found for client: {client_slug}")
+            candidates = [p for p in end_cards_dir.glob("*") if p.is_file()]
+            card_id = str(payload.end_card_id).strip()
+            selected_end_card_path = next(
+                (
+                    p
+                    for p in candidates
+                    if p.stem == card_id or p.name == card_id
+                ),
+                None,
+            )
+            if not selected_end_card_path:
+                raise HTTPException(status_code=400, detail=f"End card not found: {card_id}")
+            assemble_inputs.append(selected_end_card_path)
 
         final_path = job_dir / f"final_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+        seam_preview_path: Path | None = None
+        seam_preview_error: str | None = None
+        seam_type = str(payload.seam_type or "crossfade").strip().lower()
+        seam_ms = max(0, int(payload.xfade_ms or 0))
         try:
-            splice_reencode(assemble_inputs, final_path, seam_fade_ms=50)
+            splice_reencode(
+                assemble_inputs,
+                final_path,
+                seam_fade_ms=50,
+                seam_type=seam_type,
+                xfade_ms=seam_ms,
+            )
+            if len(adjusted_clip_paths) >= 2 and seam_type != "hard cut" and seam_ms > 0:
+                try:
+                    seam_preview_path = job_dir / f"seam_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+                    render_seam_preview(
+                        adjusted_clip_paths[0],
+                        adjusted_clip_paths[1],
+                        seam_preview_path,
+                        seam_type=seam_type if seam_type in {"crossfade", "dip to black"} else "crossfade",
+                        seam_ms=seam_ms,
+                    )
+                except Exception as seam_exc:  # noqa: BLE001
+                    seam_preview_error = str(seam_exc)
+                    seam_preview_path = None
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=500, detail=f"Final assembly failed: {exc}") from exc
+        finally:
+            for temp_path in adjusted_temp_files:
+                temp_path.unlink(missing_ok=True)
 
         self._update_job(
             job_id,
@@ -555,6 +866,8 @@ class AppState:
             stage="done",
             final_output_path=str(final_path),
             final_output_local_url=output_local_url(final_path),
+            seam_preview_path=str(seam_preview_path) if seam_preview_path else None,
+            seam_preview_local_url=output_local_url(seam_preview_path) if seam_preview_path else None,
             assembled_end_card_id=payload.end_card_id,
         )
         self.add_event(
@@ -566,10 +879,18 @@ class AppState:
                 "final_output_path": str(final_path),
                 "clip_count": len(clip_paths),
                 "has_end_card": bool(payload.end_card_id),
+                "seam_preview_path": str(seam_preview_path) if seam_preview_path else None,
+                "seam_preview_error": seam_preview_error,
+                "seam_type": seam_type,
+                "xfade_ms": seam_ms,
+                "audio_speed_total_target": total_speed,
+                "audio_speed_normalize_threshold": normalize_threshold,
+                "audio_speed_max_relative_delta": round(max_rel_delta, 4),
+                "audio_speed_normalized": should_normalize,
+                "audio_speed_adjustments": speed_adjustments,
             },
         )
         return self.get_job(job_id)
-
 
 state = AppState()
 app = FastAPI(title="Virtual Twins Operator API", version="1.0.0")
@@ -616,8 +937,9 @@ def get_client_assets(client_slug: str) -> dict[str, Any]:
 @app.post("/v1/clients/{client_slug}/assets/upload")
 async def upload_client_asset(
     client_slug: str,
-    asset_type: Literal["photo", "audio", "branding", "logo"] = Form(...),
+    asset_type: Literal["photo", "audio", "video", "branding", "logo", "end_card"] = Form(...),
     file: UploadFile = File(...),
+    title: str | None = Form(None),
 ) -> dict[str, Any]:
     client_dir = ASSETS_DIR / client_slug
     if not client_dir.exists():
@@ -642,6 +964,22 @@ async def upload_client_asset(
         target_dir = client_dir / "audio"
         target_dir.mkdir(parents=True, exist_ok=True)
         target_path = target_dir / safe_name
+    elif asset_type == "video":
+        allowed = {".mp4", ".mov", ".m4v", ".webm"}
+        if ext not in allowed:
+            raise HTTPException(status_code=400, detail="Video must be mp4/mov/m4v/webm")
+        target_dir = client_dir / "videos"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_path = target_dir / safe_name
+    elif asset_type == "end_card":
+        allowed = {".mp4", ".mov", ".m4v", ".webm"}
+        if ext not in allowed:
+            raise HTTPException(status_code=400, detail="End card must be mp4/mov/m4v/webm")
+        raw_title = (title or Path(safe_name).stem).strip()
+        safe_title = re.sub(r"[^a-zA-Z0-9_-]+", "_", raw_title).strip("_") or "end_card"
+        target_dir = client_dir / "end_cards"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_path = target_dir / f"{safe_title}{ext}"
     elif asset_type == "branding":
         if ext != ".json":
             raise HTTPException(status_code=400, detail="Branding file must be .json")
@@ -670,7 +1008,7 @@ async def upload_client_asset(
 @app.delete("/v1/clients/{client_slug}/assets")
 def delete_client_asset(
     client_slug: str,
-    asset_type: Literal["photo", "audio", "branding", "logo"],
+    asset_type: Literal["photo", "audio", "video", "branding", "logo", "end_card"],
     file_name: str | None = None,
 ) -> dict[str, Any]:
     client_dir = ASSETS_DIR / client_slug
@@ -685,6 +1023,14 @@ def delete_client_asset(
         if not file_name:
             raise HTTPException(status_code=400, detail="file_name is required for audio delete")
         target_path = client_dir / "audio" / Path(file_name).name
+    elif asset_type == "video":
+        if not file_name:
+            raise HTTPException(status_code=400, detail="file_name is required for video delete")
+        target_path = client_dir / "videos" / Path(file_name).name
+    elif asset_type == "end_card":
+        if not file_name:
+            raise HTTPException(status_code=400, detail="file_name is required for end_card delete")
+        target_path = client_dir / "end_cards" / Path(file_name).name
     elif asset_type == "branding":
         target_path = client_dir / "branding.json"
     else:  # logo
@@ -735,14 +1081,23 @@ def get_job_clips(job_id: str) -> list[dict[str, Any]]:
 
     clips: list[dict[str, Any]] = []
     for file_path in sorted([p for p in clip_dir.glob("*.mp4") if p.is_file()]):
-        match = re.match(r"^clip(?:_number)?_(\d+)_", file_path.name)
+        # Support both legacy and current clip naming:
+        # - clip_1.mp4
+        # - clip_1_20260424_101010.mp4
+        # - clip_number_1.mp4
+        # - clip_number_1_20260424_101010.mp4
+        match = re.match(r"^clip(?:_number)?_(\d+)(?:_|\.mp4$)", file_path.name)
         clip_idx = int(match.group(1)) if match else None
+        audio_speed = estimate_audio_speed(file_path)
+        duration_sec = media_duration_seconds(file_path)
         clips.append(
             {
                 "file": file_path.name,
                 "clip": clip_idx,
                 "output_path": str(file_path),
                 "output_local_url": output_local_url(file_path),
+                "audio_speed": audio_speed,
+                "duration_sec": duration_sec,
             }
         )
     clips.sort(key=lambda row: (row.get("clip") is None, row.get("clip") or 9999, row.get("file") or ""))

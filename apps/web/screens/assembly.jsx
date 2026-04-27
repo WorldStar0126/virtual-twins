@@ -1,24 +1,136 @@
 // Final assembly + end card picker
-const { useState: useStateAss } = React;
+const { useState: useStateAss, useEffect: useEffectAss } = React;
 
 function Assembly({ nav, jobId, jobs = [], clients = [], onAssemble, actingOnJob = false }) {
   const sourceJobs = jobs.length ? jobs : (window.JOBS || []);
   const sourceClients = clients.length ? clients : (window.CLIENTS || []);
   const job = sourceJobs.find((j)=>j.id===jobId) || sourceJobs[0] || null;
   const client = job ? (sourceClients.find((c)=>c.slug===job.client) || null) : null;
-  const cards = client ? (END_CARDS[client.slug] || []) : [];
+  const fallbackCards = client ? (END_CARDS[client.slug] || []) : [];
+  const [cards, setCards] = useStateAss(fallbackCards);
   const [selCard, setSelCard] = useStateAss(null);
   const [xfade, setXfade] = useStateAss(400);
   const [music, setMusic] = useStateAss('marble-morning');
   const [seamType, setSeamType] = useStateAss("crossfade");
   const [rotationPolicy, setRotationPolicy] = useStateAss("round");
-  const [assembleError, setAssembleError] = useStateAss("");
+  const [clipSpeedByIdx, setClipSpeedByIdx] = useStateAss({});
+  const [clipDurationByIdx, setClipDurationByIdx] = useStateAss({});
+  const [clipUrlByIdx, setClipUrlByIdx] = useStateAss({});
 
   if (!job || !client) {
     return <div style={{padding:'24px 28px', color:VT.textDim}}>No matching job/client found. Open Final Assembly from a selected job.</div>;
   }
 
   const duration = job.format==='20s' ? 23 : 33;
+  const api = window.VTApi?.Api;
+  const apiBase = window.VTApi?.Api?.base || "";
+  useEffectAss(() => {
+    let active = true;
+    if (!client?.slug || !api?.getClientAssets) {
+      setCards(fallbackCards);
+      return undefined;
+    }
+    const loadCards = async () => {
+      try {
+        const payload = await api.getClientAssets(client.slug);
+        if (!active) return;
+        const dynamicCards = (payload.end_cards || []).map((c, idx) => ({
+          id: c.id,
+          name: c.title || c.id,
+          layout: "uploaded",
+          motion: "video",
+          usage: 0,
+          lastUsed: "new",
+          bg: "linear-gradient(135deg, #2A1950, #1A1010)",
+          accent: "#E8B860",
+          file: c.file,
+          local_url: c.local_url,
+        }));
+        setCards(dynamicCards.length ? dynamicCards : fallbackCards);
+      } catch (err) {
+        if (!active) return;
+        setCards(fallbackCards);
+      }
+    };
+    loadCards();
+    return () => {
+      active = false;
+    };
+  }, [api, client?.slug]);
+  useEffectAss(() => {
+    let active = true;
+    if (!job?.id || !api?.getJobClips) {
+      setClipSpeedByIdx({});
+      setClipDurationByIdx({});
+      setClipUrlByIdx({});
+      return undefined;
+    }
+    const loadClipMeta = async () => {
+      try {
+        const rows = await api.getJobClips(job.id);
+        if (!active) return;
+        const nextSpeed = {};
+        const nextDuration = {};
+        const nextUrl = {};
+        (rows || []).forEach((row) => {
+          const idx = Number(row?.clip);
+          if (!idx) return;
+          const speed = Number(row?.audio_speed || 0);
+          if (speed > 0) nextSpeed[idx] = speed;
+          const durationSec = Number(row?.duration_sec || 0);
+          if (durationSec > 0) nextDuration[idx] = durationSec;
+          const direct = row?.output_local_url ? `${apiBase}${row.output_local_url}` : toOutputUrl(row?.output_path);
+          if (direct) nextUrl[idx] = direct;
+        });
+        setClipSpeedByIdx(nextSpeed);
+        setClipDurationByIdx(nextDuration);
+        setClipUrlByIdx(nextUrl);
+      } catch (err) {
+        if (!active) return;
+        setClipSpeedByIdx({});
+        setClipDurationByIdx({});
+        setClipUrlByIdx({});
+      }
+    };
+    loadClipMeta();
+    return () => {
+      active = false;
+    };
+  }, [api, apiBase, job?.id]);
+  const toOutputUrl = (path) => {
+    if (!path || !job?.client) return null;
+    const normalized = String(path).replaceAll("\\", "/");
+    const marker = `/output/${job.client}/`;
+    const idx = normalized.indexOf(marker);
+    if (idx < 0) return null;
+    const rel = normalized.slice(idx + "/output".length);
+    return `${apiBase}/output-files${rel}`;
+  };
+  const assembledVideoUrl = job?.final_output_local_url
+    ? `${apiBase}${job.final_output_local_url}`
+    : toOutputUrl(job?.final_output_path);
+  const clipRows = Object.values(job?.clip_outputs || {}).sort((a, b) => Number(a?.clip || 0) - Number(b?.clip || 0));
+  const clip1 = clipRows.find((row) => Number(row?.clip) === 1) || null;
+  const clip2 = clipRows.find((row) => Number(row?.clip) === 2) || null;
+  const clip3 = clipRows.find((row) => Number(row?.clip) === 3) || null;
+  const cacheBuster = encodeURIComponent(String(job?.updated_at || job?.created_at || job?.id || ""));
+  const clipStreamUrl = (idx) => (job?.id ? `${apiBase}/v1/jobs/${job.id}/clips/${idx}/stream?v=${cacheBuster}` : null);
+  const clip1Url = clipStreamUrl(1) || clipUrlByIdx[1] || (clip1?.output_local_url ? `${apiBase}${clip1.output_local_url}` : toOutputUrl(clip1?.output_path));
+  const clip2Url = clipStreamUrl(2) || clipUrlByIdx[2] || (clip2?.output_local_url ? `${apiBase}${clip2.output_local_url}` : toOutputUrl(clip2?.output_path));
+  const clip3Url = clipStreamUrl(3) || clipUrlByIdx[3] || (clip3?.output_local_url ? `${apiBase}${clip3.output_local_url}` : toOutputUrl(clip3?.output_path));
+  const fullPreviewUrl = assembledVideoUrl || null;
+  const seamPreviewUrl = job?.seam_preview_local_url
+    ? `${apiBase}${job.seam_preview_local_url}`
+    : toOutputUrl(job?.seam_preview_path);
+  const selectedCard = cards.find((c)=>c.id===selCard) || null;
+  const selectedCardUrl = selectedCard?.local_url ? `${apiBase}${selectedCard.local_url}` : null;
+  const previewAspect = String(job?.aspect_ratio || "9:16").replace(":", " / ");
+  const fmtClipDuration = (idx) => {
+    const sec = Number(clipDurationByIdx[idx] || 0);
+    if (!sec) return "10s";
+    const rounded = Math.max(1, Math.round(sec));
+    return `${rounded}s`;
+  };
 
   return <div style={{padding:'20px 28px', maxWidth:1480, margin:'0 auto'}}>
     <div style={{display:'flex', alignItems:'center', gap:12, marginBottom:18}}>
@@ -41,20 +153,13 @@ function Assembly({ nav, jobId, jobs = [], clients = [], onAssemble, actingOnJob
           disabled={actingOnJob}
           onClick={async ()=>{
             if (!onAssemble) return;
-            try {
-              setAssembleError("");
-              await onAssemble(job.id, selCard || null);
-              nav('dashboard');
-            } catch (err) {
-              setAssembleError(err.message || "Assemble failed");
-            }
+            await onAssemble(job.id, selCard || null, { seamType, xfadeMs: xfade });
           }}
         >
           {actingOnJob ? "Assembling..." : "Assemble & deliver"}
         </Btn>
       </div>
     </div>
-    {assembleError && <div style={{fontSize:12, color:'#F06571', marginBottom:12}}>{assembleError}</div>}
 
     <div style={{display:'grid', gridTemplateColumns:'1fr 400px', gap:20}}>
       {/* Timeline + clip preview */}
@@ -66,19 +171,100 @@ function Assembly({ nav, jobId, jobs = [], clients = [], onAssemble, actingOnJob
           <div style={{marginBottom:10}}>
             <div style={{fontSize:10, color: VT.textMuted, letterSpacing:1, textTransform:'uppercase', fontWeight:600, marginBottom:8}}>Video</div>
             <div style={{display:'flex', gap:3, height:72, borderRadius:8, overflow:'hidden'}}>
-              <div style={{flex:'10', background:`linear-gradient(120deg, ${job.thumb}50, ${job.thumb}20)`, position:'relative', display:'flex', alignItems:'flex-end', padding:8, border:`1px solid ${job.thumb}40`}}>
-                <span style={{fontSize:11, color:'#fff', fontFamily:VT.mono}}>CLIP 1 · 10s</span>
+              <div style={{
+                flex:'10',
+                background: `linear-gradient(120deg, ${job.thumb}50, ${job.thumb}20)`,
+                position:'relative',
+                display:'flex',
+                alignItems:'flex-end',
+                padding:8,
+                border:`1px solid ${job.thumb}40`,
+                overflow:'hidden'
+              }}>
+                {clip1Url && (
+                  <video
+                    src={clip1Url}
+                    muted
+                    preload="metadata"
+                    onLoadedMetadata={(e)=>{
+                      const dur = Number(e.currentTarget.duration || 0);
+                      if (dur > 0.25) e.currentTarget.currentTime = Math.min(dur * 0.35, 2.0);
+                    }}
+                    style={{position:'absolute', inset:0, width:'100%', height:'100%', objectFit:'cover'}}
+                  />
+                )}
+                <div style={{position:'absolute', inset:0, background:'linear-gradient(180deg, rgba(0,0,0,0.05), rgba(0,0,0,0.35))'}}/>
+                <div style={{position:'absolute', top:8, left:8, padding:'2px 6px', borderRadius:999, background:'rgba(10,12,20,0.65)', color:'#F2C97A', fontSize:10, fontFamily:VT.mono}}>
+                  {clipSpeedByIdx[1] ? `${clipSpeedByIdx[1].toFixed(2)}x` : "n/a"}
+                </div>
+                <span style={{fontSize:11, color:'#fff', fontFamily:VT.mono, position:'relative', zIndex:2}}>
+                  CLIP 1 · {fmtClipDuration(1)}
+                </span>
                 <IC.check width={12} height={12} style={{position:'absolute', top:8, right:8, color:'#4FD68A'}}/>
               </div>
               <div style={{width: xfade/50, background: 'linear-gradient(90deg, rgba(155,92,246,0.5), rgba(232,184,96,0.5))', height:'100%'}}/>
-              <div style={{flex:'10', background:`linear-gradient(120deg, ${job.thumb}40, ${job.thumb}15)`, position:'relative', display:'flex', alignItems:'flex-end', padding:8, border:`1px solid ${job.thumb}30`}}>
-                <span style={{fontSize:11, color:'#fff', fontFamily:VT.mono}}>CLIP 2 · 10s</span>
+              <div style={{
+                flex:'10',
+                background: `linear-gradient(120deg, ${job.thumb}40, ${job.thumb}15)`,
+                position:'relative',
+                display:'flex',
+                alignItems:'flex-end',
+                padding:8,
+                border:`1px solid ${job.thumb}30`,
+                overflow:'hidden'
+              }}>
+                {clip2Url && (
+                  <video
+                    src={clip2Url}
+                    muted
+                    preload="metadata"
+                    onLoadedMetadata={(e)=>{
+                      const dur = Number(e.currentTarget.duration || 0);
+                      if (dur > 0.25) e.currentTarget.currentTime = Math.min(dur * 0.45, 2.5);
+                    }}
+                    style={{position:'absolute', inset:0, width:'100%', height:'100%', objectFit:'cover'}}
+                  />
+                )}
+                <div style={{position:'absolute', inset:0, background:'linear-gradient(180deg, rgba(0,0,0,0.05), rgba(0,0,0,0.35))'}}/>
+                <div style={{position:'absolute', top:8, left:8, padding:'2px 6px', borderRadius:999, background:'rgba(10,12,20,0.65)', color:'#F2C97A', fontSize:10, fontFamily:VT.mono}}>
+                  {clipSpeedByIdx[2] ? `${clipSpeedByIdx[2].toFixed(2)}x` : "n/a"}
+                </div>
+                <span style={{fontSize:11, color:'#fff', fontFamily:VT.mono, position:'relative', zIndex:2}}>
+                  CLIP 2 · {fmtClipDuration(2)}
+                </span>
                 <IC.check width={12} height={12} style={{position:'absolute', top:8, right:8, color:'#4FD68A'}}/>
               </div>
               {job.format==='30s' && <>
                 <div style={{width: xfade/50, background:'linear-gradient(90deg, rgba(232,184,96,0.5), rgba(155,92,246,0.5))'}}/>
-                <div style={{flex:'10', background:`linear-gradient(120deg, ${job.thumb}35, ${job.thumb}10)`, position:'relative', display:'flex', alignItems:'flex-end', padding:8, border:`1px solid ${job.thumb}25`}}>
-                  <span style={{fontSize:11, color:'#fff', fontFamily:VT.mono}}>CLIP 3 · 10s</span>
+                <div style={{
+                  flex:'10',
+                  background: `linear-gradient(120deg, ${job.thumb}35, ${job.thumb}10)`,
+                  position:'relative',
+                  display:'flex',
+                  alignItems:'flex-end',
+                  padding:8,
+                  border:`1px solid ${job.thumb}25`,
+                  overflow:'hidden'
+                }}>
+                  {clip3Url && (
+                    <video
+                      src={clip3Url}
+                      muted
+                      preload="metadata"
+                      onLoadedMetadata={(e)=>{
+                        const dur = Number(e.currentTarget.duration || 0);
+                        if (dur > 0.25) e.currentTarget.currentTime = Math.min(dur * 0.55, 3.0);
+                      }}
+                      style={{position:'absolute', inset:0, width:'100%', height:'100%', objectFit:'cover'}}
+                    />
+                  )}
+                  <div style={{position:'absolute', inset:0, background:'linear-gradient(180deg, rgba(0,0,0,0.05), rgba(0,0,0,0.35))'}}/>
+                  <div style={{position:'absolute', top:8, left:8, padding:'2px 6px', borderRadius:999, background:'rgba(10,12,20,0.65)', color:'#F2C97A', fontSize:10, fontFamily:VT.mono}}>
+                    {clipSpeedByIdx[3] ? `${clipSpeedByIdx[3].toFixed(2)}x` : "n/a"}
+                  </div>
+                  <span style={{fontSize:11, color:'#fff', fontFamily:VT.mono, position:'relative', zIndex:2}}>
+                    CLIP 3 · {fmtClipDuration(3)}
+                  </span>
                 </div>
               </>}
               <div style={{flex:'3', background:'linear-gradient(135deg, #2A1950, #1A1010)', position:'relative', display:'flex', alignItems:'flex-end', padding:8, border:'1px solid rgba(232,184,96,0.3)'}}>
@@ -109,7 +295,10 @@ function Assembly({ nav, jobId, jobs = [], clients = [], onAssemble, actingOnJob
                 {['hard cut','crossfade','dip to black'].map((o) =>
                   <button
                     key={o}
-                    onClick={()=>setSeamType(o)}
+                    onClick={()=>{
+                      setSeamType(o);
+                      if (o === "hard cut") setXfade(0);
+                    }}
                     style={{
                       flex:1, padding:'5px 6px', fontSize:10.5, fontWeight:600, borderRadius:4, border:'none', cursor:'pointer',
                       background: seamType===o ? VT.bg5 : 'transparent',
@@ -123,7 +312,22 @@ function Assembly({ nav, jobId, jobs = [], clients = [], onAssemble, actingOnJob
             </div>
             <div>
               <div style={{fontSize:10.5, color: VT.textMuted, letterSpacing:.8, textTransform:'uppercase', fontWeight:600, marginBottom:6}}>Xfade</div>
-              <input type="range" min={0} max={1000} value={xfade} onChange={e=>setXfade(+e.target.value)} style={{width:'100%', accentColor:'#9B5CF6'}}/>
+              <input
+                type="range"
+                min={0}
+                max={1000}
+                value={xfade}
+                onChange={(e)=>{
+                  const next = +e.target.value;
+                  setXfade(next);
+                  if (next === 0) {
+                    setSeamType("hard cut");
+                  } else if (seamType === "hard cut") {
+                    setSeamType("crossfade");
+                  }
+                }}
+                style={{width:'100%', accentColor:'#9B5CF6'}}
+              />
               <div style={{fontSize:10.5, color:VT.textDim, fontFamily: VT.mono}}>{xfade}ms</div>
             </div>
             <div>
@@ -141,14 +345,57 @@ function Assembly({ nav, jobId, jobs = [], clients = [], onAssemble, actingOnJob
         {/* Full preview */}
         <Panel pad={14}>
           <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12}}>
-            <div style={{fontSize:13, fontWeight:600, color: VT.text}}>Full preview · 9:16</div>
-            <span style={{fontSize:11, color: VT.textDim, fontFamily:VT.mono}}>{duration}.{Math.floor(Math.random()*10)}s · 10.8 MB</span>
+            <div style={{fontSize:13, fontWeight:600, color: VT.text}}>Full preview · {job?.aspect_ratio || "9:16"}</div>
+            <span style={{fontSize:11, color: VT.textDim, fontFamily:VT.mono}}>
+              {assembledVideoUrl ? "Assembled output ready" : `${duration}.{Math.floor(Math.random()*10)}s · 10.8 MB`}
+            </span>
           </div>
-          <div style={{display:'flex', gap:10, alignItems:'center'}}>
-            <VideoThumb accent={job.thumb} w={120} h={213} playing progress={28} label="play full"/>
-            <div style={{flex:1, display:'flex', flexDirection:'column', gap:8}}>
-              <VideoThumb accent={job.thumb} w={'100%'} h={60} label="CLIP 1 → CLIP 2 seam"/>
-              <VideoThumb accent="#E8B860" w={'100%'} h={60} label={`END CARD · ${cards.find(c=>c.id===selCard)?.name || 'select'}`}/>
+          <div style={{display:'grid', gridTemplateColumns:'120px 1fr', gap:10, alignItems:'stretch'}}>
+            <div style={{minHeight:220}}>
+              {fullPreviewUrl ? (
+                <video
+                  key={fullPreviewUrl}
+                  src={fullPreviewUrl}
+                  controls
+                  preload="metadata"
+                  style={{width:'100%', height:'100%', minHeight:220, aspectRatio:previewAspect, borderRadius:10, background:'#000', border:`1px solid ${VT.lineHi}`}}
+                />
+              ) : (
+                <VideoThumb accent={job.thumb} w={'100%'} h={220} playing progress={28} label="play full"/>
+              )}
+            </div>
+            <div style={{display:'flex', flexDirection:'column', gap:8}}>
+              <div style={{height:106, borderRadius:10, overflow:'hidden', border:`1px solid ${VT.lineHi}`, background:'#000'}}>
+                {seamPreviewUrl ? (
+                  <video
+                    key={`${seamPreviewUrl}-seam`}
+                    src={seamPreviewUrl}
+                    controls
+                    preload="metadata"
+                    style={{width:'100%', height:'100%', objectFit:'cover', background:'#000'}}
+                  />
+                ) : (
+                  <VideoThumb accent={job.thumb} w={'100%'} h={'100%'} playing progress={52} label="CLIP 1 → CLIP 2 seam"/>
+                )}
+              </div>
+              <div style={{height:106, borderRadius:10, overflow:'hidden', border:`1px solid ${VT.lineHi}`, background:'#000'}}>
+                {selectedCardUrl ? (
+                  <video
+                    key={selectedCardUrl}
+                    src={selectedCardUrl}
+                    controls
+                    preload="metadata"
+                    style={{width:'100%', height:'100%', objectFit:'cover', background:'#000'}}
+                  />
+                ) : (
+                  <VideoThumb
+                    accent="#E8B860"
+                    w={'100%'}
+                    h={'100%'}
+                    label={`END CARD · ${selectedCard?.name || 'select'}`}
+                  />
+                )}
+              </div>
             </div>
           </div>
         </Panel>

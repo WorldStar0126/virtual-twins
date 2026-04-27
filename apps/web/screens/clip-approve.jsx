@@ -11,6 +11,7 @@ function ClipApprove({ nav, jobId, jobs = [], clients = [], onApproval, onRegene
   const selectedAudioRefs = (job?.audio_indices && job.audio_indices.length > 0)
     ? job.audio_indices.map((idx) => `@Audio${idx}`)
     : [];
+  const voiceLabel = `${selectedAudioRefs[0] || "@Audio1"} (cloned)`;
   const selectedRefs = [...selectedImageRefs, ...selectedAudioRefs];
   const fallbackLocalUrl = (() => {
     if (!job?.output_path || !job?.client) return null;
@@ -37,8 +38,9 @@ function ClipApprove({ nav, jobId, jobs = [], clients = [], onApproval, onRegene
   const currentClip = reviewMatch ? Number(reviewMatch[1]) : Math.max(1, Number(job?.clipsDone || 1));
   const isFinalClip = currentClip >= Number(job?.clipsTotal || 2);
   const isAnyGenerating = job?.status === "rendering";
-  const isPostFinalApproval = job?.status === "awaiting_assembly" || job?.stage === "assembly_review" || job?.status === "done";
+  const isPostFinalApproval = job?.status === "queued" || job?.status === "awaiting_assembly" || job?.stage === "assembly_review" || job?.status === "done";
   const disableDecisionActions = actingOnJob || isAnyGenerating || isPostFinalApproval;
+  const disableRejectStop = actingOnJob || isPostFinalApproval;
 
   const toOutputUrl = (path) => {
     if (!path || !job?.client) return null;
@@ -81,6 +83,7 @@ function ClipApprove({ nav, jobId, jobs = [], clients = [], onApproval, onRegene
 
   const currentClipEntry = clipDownloads.find((c) => c.clip === currentClip);
   const activePlayableUrl = currentClipEntry?.url || playableUrl;
+  const displaySeed = job?.seed || String(job?.id || "unknown");
 
   useEffectA(() => {
     let active = true;
@@ -180,7 +183,7 @@ function ClipApprove({ nav, jobId, jobs = [], clients = [], onApproval, onRegene
               <Pill tone="brand" small>CLIP {currentClip} / {job.clipsTotal}</Pill>
               <Pill tone="neutral" small>{`10.0s · ${job.resolution || '720p'} · ${job.aspect_ratio || '9:16'} · ${job.fast_tier ? 'Fast' : 'Standard'}`}</Pill>
             </div>
-            <div style={{fontFamily: VT.mono, fontSize:11, color:'rgba(255,255,255,0.6)'}}>seed: 48217_01</div>
+            <div style={{fontFamily: VT.mono, fontSize:11, color:'rgba(255,255,255,0.6)'}}>seed: {displaySeed}</div>
           </div>
 
           {/* Scrubber */}
@@ -233,7 +236,7 @@ function ClipApprove({ nav, jobId, jobs = [], clients = [], onApproval, onRegene
               try {
                 setError("");
                 const updated = await onApproval(job.id, true, note);
-                if (updated.status === "awaiting_assembly" || updated.status === "done") nav("assembly", updated.id);
+                if (updated.status === "queued" || updated.status === "awaiting_assembly" || updated.status === "done") nav("assembly", updated.id);
                 else nav("clip-approve", updated.id);
               } catch (err) {
                 setError(err.message || "Approval failed");
@@ -279,7 +282,7 @@ function ClipApprove({ nav, jobId, jobs = [], clients = [], onApproval, onRegene
               } catch (err) {
                 setError(err.message || "Rejection failed");
               }
-            }} disabled={disableDecisionActions}>Reject & stop</Btn>
+            }} disabled={disableRejectStop}>Reject & stop</Btn>
           </div>
           {error && <div style={{fontSize:12, color:'#F06571', marginBottom:10}}>{error}</div>}
 
@@ -301,7 +304,7 @@ function ClipApprove({ nav, jobId, jobs = [], clients = [], onApproval, onRegene
               {l:'Setting',     v:'Staged living room, warm',     tone:'success'},
               {l:'Lighting',    v:'Golden hour, direction L',     tone:'success'},
               {l:'Frame ref',   v:'Best frame of clip 1 extracted', tone:'info'},
-              {l:'Voice',       v:'@Audio1 (cloned)',              tone:'success'},
+              {l:'Voice',       v:voiceLabel,                      tone:'success'},
             ].map(r =>
               <div key={r.l} style={{display:'flex', alignItems:'center', justifyContent:'space-between', padding:'8px 10px', background: VT.bg4, borderRadius:7}}>
                 <div>
@@ -352,11 +355,6 @@ function ClipApprove({ nav, jobId, jobs = [], clients = [], onApproval, onRegene
           <div style={{fontSize:11, color: VT.textDim, display:'flex', alignItems:'center', gap:6}}>
             <IC.clock width={12} height={12}/> Clip 1 rendered in 3m 14s · started 6h ago
           </div>
-          {(currentClipEntry?.path || job?.output_path) && (
-            <div style={{fontSize:10.5, color: VT.textMuted, marginTop:8, fontFamily: VT.mono, wordBreak:'break-all'}}>
-              Local file: {currentClipEntry?.path || job.output_path}
-            </div>
-          )}
         </Panel>
         <Panel pad={16}>
           <SectionHeader title="Run events" eyebrow={`${events.length} events`}/>

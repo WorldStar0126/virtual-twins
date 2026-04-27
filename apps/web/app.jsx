@@ -116,12 +116,45 @@ function App() {
 
   const nav = (p, a=null) => {
     if (p === 'clip-approve' && a) localStorage.setItem('vt_last_clip_job_id', a);
+    if (p === 'assembly' && a) localStorage.setItem('vt_last_assembly_job_id', a);
     setPage(p);
     setArg(a);
     window.scrollTo(0,0);
   };
   const lastClipJobId = localStorage.getItem('vt_last_clip_job_id');
-  const clipApproveJobId = arg || lastClipJobId || operator.jobs[0]?.id || 'job_48217';
+  const lastAssemblyJobId = localStorage.getItem('vt_last_assembly_job_id');
+  const byLatestCreated = (a, b) => {
+    const ta = Date.parse(a?.created_at || a?.createdAt || "");
+    const tb = Date.parse(b?.created_at || b?.createdAt || "");
+    if (Number.isNaN(ta) && Number.isNaN(tb)) return 0;
+    if (Number.isNaN(ta)) return 1;
+    if (Number.isNaN(tb)) return -1;
+    return tb - ta;
+  };
+  const latestAwaitingApproval = (operator.jobs || [])
+    .filter((j) => j?.status === "awaiting_approval")
+    .sort(byLatestCreated)[0];
+  const latestDelivered = (operator.jobs || [])
+    .filter((j) => j?.status === "done" || j?.status === "delivered")
+    .sort(byLatestCreated)[0];
+  const assemblyJobId =
+    arg ||
+    lastAssemblyJobId ||
+    latestDelivered?.id ||
+    operator.jobs[0]?.id ||
+    null;
+  uE(() => {
+    if (page === "assembly" && assemblyJobId) {
+      localStorage.setItem("vt_last_assembly_job_id", assemblyJobId);
+    }
+  }, [page, assemblyJobId]);
+  const clipApproveJobId =
+    arg ||
+    latestAwaitingApproval?.id ||
+    latestDelivered?.id ||
+    lastClipJobId ||
+    operator.jobs[0]?.id ||
+    'job_48217';
 
   // Tweaks host protocol
   uE(() => {
@@ -153,7 +186,7 @@ function App() {
       case 'dashboard':    return <Dashboard nav={nav} clients={operator.clients} jobs={operator.jobs} loading={operator.loading} error={operator.error} connected={operator.connected}/>;
       case 'job-new':      return <JobNew nav={nav} clients={operator.clients} creatingJob={operator.creatingJob} onCreateJob={operator.createJob}/>;
       case 'clip-approve': return <ClipApprove nav={nav} jobId={clipApproveJobId} jobs={operator.jobs} clients={operator.clients} onApproval={operator.approveJob} onRegenerate={operator.regenerateClip1} onStop={operator.stopJob} actingOnJob={operator.actingOnJob} fetchEvents={operator.fetchEvents} fetchJobClips={operator.fetchJobClips} />;
-      case 'assembly':     return <Assembly nav={nav} jobId={arg || operator.jobs[0]?.id || null} jobs={operator.jobs} clients={operator.clients} onAssemble={operator.assembleJob} actingOnJob={operator.actingOnJob}/>;
+      case 'assembly':     return <Assembly nav={nav} jobId={assemblyJobId} jobs={operator.jobs} clients={operator.clients} onAssemble={operator.assembleJob} actingOnJob={operator.actingOnJob}/>;
       case 'assets':       return <AssetsVault nav={nav} clientSlug={arg||operator.clients[0]?.slug||'dan-balkun'} clients={operator.clients}/>;
       case 'endcards':     return <EndCardPool nav={nav} clientSlug={arg||operator.clients[0]?.slug||'dan-balkun'}/>;
       case 'history':      return <History nav={nav} jobs={operator.jobs} clients={operator.clients} loading={operator.loading}/>;
