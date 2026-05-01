@@ -4,8 +4,10 @@ import json
 import re
 import subprocess
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
+from fractions import Fraction
 from pathlib import Path
 from typing import Any, Literal
 
@@ -16,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from tools.download_video import download_video
+from tools.generate_end_card import BrandingError, render as render_end_card
 from tools.generate_video import generate_video
 from tools.splice_clips import splice_reencode
 from tools.upload_assets import upload_client_assets
@@ -67,102 +70,107 @@ def media_duration_seconds(path: Path) -> float:
     return max(0.0, float((probe.stdout or "0").strip() or 0.0))
 
 
-def has_audio_stream(path: Path) -> bool:
+def media_video_dimensions(path: Path) -> tuple[int, int]:
     probe = subprocess.run(
         [
             "ffprobe",
             "-v",
             "error",
             "-select_streams",
-            "a:0",
+            "v:0",
             "-show_entries",
-            "stream=codec_type",
+            "stream=width,height",
             "-of",
-            "csv=p=0",
+            "csv=p=0:s=x",
             str(path),
         ],
         capture_output=True,
         text=True,
-        check=False,
+        check=True,
     )
-    return bool((probe.stdout or "").strip())
+    raw = (probe.stdout or "").strip()
+    m = re.match(r"^\s*(\d+)x(\d+)\s*$", raw)
+    if not m:
+        raise ValueError(f"Could not read video dimensions for {path.name}")
+    return int(m.group(1)), int(m.group(2))
 
 
-def estimate_audio_speed(path: Path) -> float:
-    """Estimate speaking pace factor from speech activity ratio."""
-    if not has_audio_stream(path):
-        return 0.0
-    total = media_duration_seconds(path)
-    if total <= 0:
-        return 0.0
-    detect = subprocess.run(
+def media_video_timing(path: Path) -> tuple[float, int]:
+    probe = subprocess.run(
         [
-            "ffmpeg",
+            "ffprobe",
             "-v",
-            "info",
-            "-i",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=r_frame_rate,time_base",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
             str(path),
-            "-af",
-            "silencedetect=noise=-30dB:d=0.20",
-            "-f",
-            "null",
-            "-",
         ],
         capture_output=True,
         text=True,
-        check=False,
+        check=True,
     )
-    silence_total = 0.0
-    for m in re.finditer(r"silence_duration:\s*([0-9.]+)", detect.stderr or ""):
-        silence_total += float(m.group(1))
-    speaking_ratio = max(0.0, min(1.0, (total - silence_total) / total))
-    # 1.0 ~= typical speaking density; below/above means slower/faster perceived pace.
-    # Keep a floor to avoid extreme underestimation, but allow faster clips to show
-    # more separation in UI instead of flattening at 1.40x.
-    pace_factor = speaking_ratio / 0.55
-    return round(max(0.6, min(2.0, pace_factor)), 2)
+    lines = [ln.strip() for ln in (probe.stdout or "").splitlines() if ln.strip()]
+    if len(lines) < 2:
+        raise ValueError(f"Could not read video timing for {path.name}")
+    fps_frac = Fraction(lines[0])
+    tb_frac = Fraction(lines[1])
+    fps = float(fps_frac) if fps_frac > 0 else 0.0
+    if tb_frac <= 0:
+        raise ValueError(f"Invalid stream time_base for {path.name}")
+    timescale = int(round(1.0 / float(tb_frac)))
+    return fps, max(1, timescale)
 
 
-def build_atempo_filter(speed_factor: float) -> str:
-    """Build ffmpeg atempo chain for any positive speed factor."""
-    factor = max(0.01, float(speed_factor))
-    parts: list[str] = []
-    while factor < 0.5:
-        parts.append("atempo=0.5")
-        factor /= 0.5
-    while factor > 2.0:
-        parts.append("atempo=2.0")
-        factor /= 2.0
-    parts.append(f"atempo={factor:.6f}")
-    return ",".join(parts)
-
-
-def retime_clip_av(input_path: Path, output_path: Path, audio_speed_factor: float, video_pts_factor: float) -> None:
-    """Retime both audio and video to preserve sync."""
-    af = build_atempo_filter(audio_speed_factor)
-    vf = f"setpts={video_pts_factor:.6f}*PTS"
+def normalize_end_card_aspect(
+    input_path: Path,
+    output_path: Path,
+    target_w: int,
+    target_h: int,
+    target_fps: float | None = None,
+    target_timescale: int | None = None,
+) -> None:
+    fps_filter = ""
+    if target_fps and target_fps > 0:
+        fps_filter = f"fps={target_fps:.6f},"
+    timebase_filter = "settb=AVTB,"
+    if target_timescale and target_timescale > 0:
+        timebase_filter = f"settb=1/{int(target_timescale)},"
+    vf = (
+        fps_filter
+        + timebase_filter
+        + (
+        f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,"
+        f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black,"
+        "setsar=1,format=yuv420p"
+        )
+    )
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(input_path),
+        "-vf",
+        vf,
+        "-c:v",
+        "libx264",
+        "-preset",
+        "medium",
+        "-crf",
+        "18",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+    ]
+    if target_timescale and target_timescale > 0:
+        cmd.extend(["-video_track_timescale", str(int(target_timescale))])
+    cmd.append(str(output_path))
     subprocess.run(
-        [
-            "ffmpeg",
-            "-y",
-            "-i",
-            str(input_path),
-            "-vf",
-            vf,
-            "-af",
-            af,
-            "-c:v",
-            "libx264",
-            "-preset",
-            "medium",
-            "-crf",
-            "18",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "192k",
-            str(output_path),
-        ],
+        cmd,
         check=True,
     )
 
@@ -270,6 +278,10 @@ class JobCreateRequest(BaseModel):
 class ApprovalRequest(BaseModel):
     approved: bool
     note: str = ""
+    next_clip_mode: Literal[
+        "continue_without_this_clip",
+        "generate_next_clip_related_to_before_clip_last_frame",
+    ] = "continue_without_this_clip"
 
 
 class AssembleRequest(BaseModel):
@@ -301,19 +313,89 @@ class AppState:
     def clear_cancel(self, job_id: str) -> None:
         self._cancel_requested.discard(job_id)
 
+    def _generate_clip_with_retry(
+        self,
+        job_id: str,
+        clip_idx: int,
+        *,
+        client: str,
+        prompt: str,
+        duration: str,
+        resolution: str,
+        aspect_ratio: str,
+        fast: bool,
+        max_attempts: int = 3,
+    ) -> dict[str, Any]:
+        last_exc: Exception | None = None
+        for attempt in range(1, max_attempts + 1):
+            if self.is_cancel_requested(job_id):
+                raise RuntimeError("Generation cancelled by user")
+            try:
+                return generate_video(
+                    client=client,
+                    prompt=prompt,
+                    duration=duration,
+                    resolution=resolution,
+                    aspect_ratio=aspect_ratio,
+                    fast=fast,
+                )
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                if attempt >= max_attempts:
+                    break
+                backoff_s = min(8, 2 * attempt)
+                self.add_event(
+                    job_id,
+                    f"clip_{clip_idx}.retry",
+                    f"Clip {clip_idx} generation failed (attempt {attempt}/{max_attempts}); retrying",
+                    {"error": str(exc), "retry_in_sec": backoff_s},
+                )
+                time.sleep(backoff_s)
+        assert last_exc is not None
+        raise last_exc
+
     def clients(self) -> list[dict[str, Any]]:
         clients: list[dict[str, Any]] = []
         for client_dir in sorted(ASSETS_DIR.iterdir() if ASSETS_DIR.exists() else []):
-            if not client_dir.is_dir() or client_dir.name.startswith("_"):
+            # "apps/api/assets" contains non-client folders like fonts.
+            # The operator UI expects only real client directories.
+            if (
+                not client_dir.is_dir()
+                or client_dir.name.startswith("_")
+                or client_dir.name in {"fonts"}
+            ):
                 continue
             photos = client_dir / "photos"
             audio = client_dir / "audio"
+            industry: str | None = None
+            branding_path = client_dir / "branding.json"
+            if branding_path.exists():
+                try:
+                    parsed = json.loads(branding_path.read_text(encoding="utf-8"))
+                    raw = (parsed.get("identity") or {}).get("industry")
+                    if isinstance(raw, str):
+                        raw_norm = raw.strip().lower()
+                        if raw_norm in {"real_estate", "real estate", "realestate"}:
+                            industry = "Real Estate"
+                        elif raw_norm in {
+                            "title_closing",
+                            "title closing",
+                            "title/closing",
+                            "title / closing",
+                        }:
+                            industry = "Title / Closing"
+                        elif raw_norm in {"automotive", "auto"}:
+                            industry = "Automotive"
+                        elif raw in {"Real Estate", "Title / Closing", "Automotive"}:
+                            industry = raw
+                except Exception:  # noqa: BLE001
+                    industry = None
             clients.append(
                 {
                     "slug": client_dir.name,
                     "name": client_dir.name.replace("-", " ").title(),
                     "company": f"{client_dir.name.replace('-', ' ').title()} Team",
-                    "industry": "Video Automation",
+                    "industry": industry,
                     "market": "Internal",
                     "tier": "Standard",
                     "status": "Active",
@@ -567,7 +649,9 @@ class AppState:
                 self.add_event(job_id, "job.stopped", "Job stopped after upload")
                 return
 
-            result = generate_video(
+            result = self._generate_clip_with_retry(
+                job_id,
+                1,
                 client=job["client"],
                 prompt=job["prompt"],
                 duration="10",
@@ -620,7 +704,9 @@ class AppState:
                 self.add_event(job_id, "job.stopped", f"Job stopped before clip {clip_idx} generation")
                 return
 
-            result = generate_video(
+            result = self._generate_clip_with_retry(
+                job_id,
+                clip_idx,
                 client=job["client"],
                 prompt=job["prompt"],
                 duration="10",
@@ -701,12 +787,17 @@ class AppState:
                     job_id,
                     f"clip_{clip_idx}.approved",
                     f"Clip {clip_idx} approved; continuing generation",
-                    {"note": payload.note},
+                    {"note": payload.note, "next_clip_mode": payload.next_clip_mode},
                 )
                 threading.Thread(target=self._run_clip_n, args=(job_id, next_idx), daemon=True).start()
             else:
                 self._update_job(job_id, status="queued", stage="assembly_review")
-                self.add_event(job_id, f"clip_{clip_idx}.approved", "Final clip approved; ready for assembly", {"note": payload.note})
+                self.add_event(
+                    job_id,
+                    f"clip_{clip_idx}.approved",
+                    "Final clip approved; ready for assembly",
+                    {"note": payload.note, "next_clip_mode": payload.next_clip_mode},
+                )
         else:
             self._update_job(job_id, status="failed", stage="stopped_by_rejection")
             self.add_event(job_id, f"clip_{clip_idx}.rejected", f"Clip {clip_idx} rejected; job stopped", {"note": payload.note})
@@ -717,10 +808,14 @@ class AppState:
         if job.get("status") == "rendering":
             raise HTTPException(status_code=409, detail="Clip is currently generating.")
         stage = str(job.get("stage", ""))
-        m = re.fullmatch(r"clip_(\d+)_review", stage)
+        m = re.fullmatch(r"clip_(\d+)_(review|gen)", stage)
         if not m:
             raise HTTPException(status_code=409, detail=f"Job is not in clip review stage. Current stage: {stage}")
         clip_idx = int(m.group(1))
+        stage_kind = m.group(2)
+        # Allow retry when a clip failed during generation (e.g. clip_2_gen + status=failed).
+        if stage_kind == "gen" and job.get("status") != "failed":
+            raise HTTPException(status_code=409, detail=f"Clip {clip_idx} is not in a failed state.")
         self._update_job(job_id, status="rendering", stage=f"clip_{clip_idx}_gen")
         self.add_event(job_id, f"clip_{clip_idx}.regenerate_requested", f"Regenerating clip {clip_idx}")
         if clip_idx == 1:
@@ -764,49 +859,6 @@ class AppState:
 
         adjusted_clip_paths = list(clip_paths)
         adjusted_temp_files: list[Path] = []
-        speed_adjustments: list[dict[str, Any]] = []
-        speed_by_clip: dict[int, float] = {}
-        for i, clip_path in enumerate(clip_paths, start=1):
-            if not has_audio_stream(clip_path):
-                continue
-            clip_speed = estimate_audio_speed(clip_path)
-            if clip_speed > 0:
-                speed_by_clip[i] = clip_speed
-
-        total_speed = round(sum(speed_by_clip.values()) / len(speed_by_clip), 4) if speed_by_clip else 0.0
-        # Normalize only when clips differ materially from the average pace.
-        normalize_threshold = 0.05
-        max_rel_delta = max((abs((s / total_speed) - 1.0) for s in speed_by_clip.values()), default=0.0) if total_speed > 0 else 0.0
-        should_normalize = total_speed > 0 and max_rel_delta > normalize_threshold
-
-        if should_normalize:
-            for i, clip_path in enumerate(clip_paths, start=1):
-                clip_speed = speed_by_clip.get(i)
-                if not clip_speed:
-                    continue
-                audio_atempo_factor = total_speed / clip_speed
-                video_setpts_factor = clip_speed / total_speed
-                if abs(audio_atempo_factor - 1.0) < 0.01:
-                    continue
-                retimed_path = job_dir / f"_assembly_retime_clip_{i}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.mp4"
-                retime_clip_av(
-                    clip_path,
-                    retimed_path,
-                    audio_speed_factor=audio_atempo_factor,
-                    video_pts_factor=video_setpts_factor,
-                )
-                adjusted_clip_paths[i - 1] = retimed_path
-                adjusted_temp_files.append(retimed_path)
-                speed_adjustments.append(
-                    {
-                        "clip": i,
-                        "from_speed": clip_speed,
-                        "to_speed_target": total_speed,
-                        "atempo_factor": round(audio_atempo_factor, 4),
-                        "setpts_factor": round(video_setpts_factor, 4),
-                        "output_file": retimed_path.name,
-                    }
-                )
 
         assemble_inputs = list(adjusted_clip_paths)
         selected_end_card_path: Path | None = None
@@ -826,6 +878,29 @@ class AppState:
             )
             if not selected_end_card_path:
                 raise HTTPException(status_code=400, detail=f"End card not found: {card_id}")
+            # End-card-only normalization: keep clip streams untouched and reshape
+            # only the selected end card to clip dimensions when needed.
+            target_w, target_h = media_video_dimensions(adjusted_clip_paths[0])
+            target_fps, target_timescale = media_video_timing(adjusted_clip_paths[0])
+            card_w, card_h = media_video_dimensions(selected_end_card_path)
+            card_fps, card_timescale = media_video_timing(selected_end_card_path)
+            needs_normalize = (
+                (card_w, card_h) != (target_w, target_h)
+                or abs(card_fps - target_fps) > 0.01
+                or card_timescale != target_timescale
+            )
+            if needs_normalize:
+                normalized_end_card_path = job_dir / f"_assembly_endcard_aspect_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.mp4"
+                normalize_end_card_aspect(
+                    selected_end_card_path,
+                    normalized_end_card_path,
+                    target_w=target_w,
+                    target_h=target_h,
+                    target_fps=target_fps,
+                    target_timescale=target_timescale,
+                )
+                adjusted_temp_files.append(normalized_end_card_path)
+                selected_end_card_path = normalized_end_card_path
             assemble_inputs.append(selected_end_card_path)
 
         final_path = job_dir / f"final_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
@@ -883,11 +958,6 @@ class AppState:
                 "seam_preview_error": seam_preview_error,
                 "seam_type": seam_type,
                 "xfade_ms": seam_ms,
-                "audio_speed_total_target": total_speed,
-                "audio_speed_normalize_threshold": normalize_threshold,
-                "audio_speed_max_relative_delta": round(max_rel_delta, 4),
-                "audio_speed_normalized": should_normalize,
-                "audio_speed_adjustments": speed_adjustments,
             },
         )
         return self.get_job(job_id)
@@ -1054,6 +1124,62 @@ def delete_client_asset(
     }
 
 
+@app.post("/v1/clients/{client_slug}/end-cards/generate")
+async def generate_client_end_card(
+    client_slug: str,
+    branding_file: UploadFile | None = File(None),
+) -> dict[str, Any]:
+    client_dir = ASSETS_DIR / client_slug
+    if not client_dir.exists():
+        raise HTTPException(status_code=404, detail=f"Client assets not found: {client_slug}")
+
+    branding_path = client_dir / "branding.json"
+    if not branding_path.exists() and not branding_file:
+        raise HTTPException(status_code=400, detail=f"Branding file not found for client: {client_slug}")
+
+    source_path = branding_path
+    temp_branding_path: Path | None = None
+    if branding_file:
+        safe_name = Path(branding_file.filename or "").name
+        if Path(safe_name).suffix.lower() != ".json":
+            raise HTTPException(status_code=400, detail="Branding file must be .json")
+        contents = await branding_file.read()
+        if not contents:
+            raise HTTPException(status_code=400, detail="Branding file is empty")
+        try:
+            json.loads(contents.decode("utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=f"Invalid branding JSON: {exc}") from exc
+        temp_branding_path = client_dir / f"_tmp_branding_{uuid.uuid4().hex[:10]}.json"
+        temp_branding_path.write_bytes(contents)
+        source_path = temp_branding_path
+
+    end_cards_dir = client_dir / "end_cards"
+    end_cards_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_file = f"end_card_{timestamp}.mp4"
+    out_path = end_cards_dir / out_file
+
+    try:
+        result = render_end_card(source_path, out_path)
+    except BrandingError as exc:
+        raise HTTPException(status_code=400, detail=f"Branding error: {exc}") from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"End card generation failed: {exc}") from exc
+    finally:
+        if temp_branding_path:
+            temp_branding_path.unlink(missing_ok=True)
+
+    return {
+        "ok": True,
+        "client": client_slug,
+        "file": out_file,
+        "local_url": f"/assets-files/{client_slug}/end_cards/{out_file}",
+        "status": result.get("status"),
+        "hash": result.get("hash"),
+    }
+
+
 @app.post("/v1/jobs")
 def create_job(payload: JobCreateRequest) -> dict[str, Any]:
     return state.create_job(payload)
@@ -1088,7 +1214,6 @@ def get_job_clips(job_id: str) -> list[dict[str, Any]]:
         # - clip_number_1_20260424_101010.mp4
         match = re.match(r"^clip(?:_number)?_(\d+)(?:_|\.mp4$)", file_path.name)
         clip_idx = int(match.group(1)) if match else None
-        audio_speed = estimate_audio_speed(file_path)
         duration_sec = media_duration_seconds(file_path)
         clips.append(
             {
@@ -1096,7 +1221,6 @@ def get_job_clips(job_id: str) -> list[dict[str, Any]]:
                 "clip": clip_idx,
                 "output_path": str(file_path),
                 "output_local_url": output_local_url(file_path),
-                "audio_speed": audio_speed,
                 "duration_sec": duration_sec,
             }
         )

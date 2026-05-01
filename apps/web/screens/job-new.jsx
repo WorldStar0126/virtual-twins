@@ -17,6 +17,7 @@ function StepChip({ n, active, done, alert, label }) {
 
 function JobNew({ nav, clients = [], creatingJob = false, onCreateJob }) {
   const templates = window.TEMPLATES || [];
+  const customTemplate = templates.find((t) => t.id === 't_custom') || null;
   const api = window.VTApi?.Api;
   const apiBase = api?.base || "";
   const [client, setClient] = useStateN(clients[1] || clients[0] || null);
@@ -89,7 +90,10 @@ function JobNew({ nav, clients = [], creatingJob = false, onCreateJob }) {
   const hasAudioRef = selectedAudio.length > 0;
   const canGenerate = isClientValid && isPromptValid && hasPhotoRef;
   const isStep1Done = isClientValid && Boolean(format);
-  const isStep2Done = isPromptValid; // template is optional
+  // Step 2 (template + prompt) is considered done when:
+  // - a non-"Custom / Freeform" template is selected, OR
+  // - the prompt text is valid (freeform or structured).
+  const isStep2Done = Boolean(template?.id) && template?.id !== 't_custom' || isPromptValid;
   const isStep3Done = hasPhotoRef; // audio is optional
   const isStep4Done = canGenerate;
   const showStepAlerts = stepAlertPulse && !canGenerate;
@@ -259,7 +263,13 @@ function JobNew({ nav, clients = [], creatingJob = false, onCreateJob }) {
         <Panel pad={18}>
           <SectionHeader title="Template" eyebrow="Step 2 · pick a content type"/>
           <div style={{display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:8}}>
-            {templates.filter(t=>!client || t.industries.includes(client.industry)||t.id==='t_custom').map(t =>
+            {(() => {
+              const industry = client?.industry;
+              // If industry is missing/unknown, hide all category templates but keep "Custom / Freeform".
+              const list = templates.filter(
+                (t) => t.id === 't_custom' || (industry && t.industries?.includes(industry)),
+              );
+              return list.map((t) =>
               <div key={t.id} onClick={()=>setTemplate(template?.id===t.id ? null : t)} style={{
                 padding:'14px 12px', borderRadius:10, cursor:'pointer',
                 background: template?.id===t.id ? 'rgba(155,92,246,0.08)' : VT.bg3,
@@ -273,7 +283,7 @@ function JobNew({ nav, clients = [], creatingJob = false, onCreateJob }) {
                 <div style={{fontSize:11.5, fontWeight:600, color: VT.text, marginBottom:2}}>{t.name}</div>
                 <div style={{fontSize:10, color: VT.textMuted}}>{t.duration}</div>
               </div>
-            )}
+            ); })()}
           </div>
         </Panel>
 
@@ -303,14 +313,21 @@ function JobNew({ nav, clients = [], creatingJob = false, onCreateJob }) {
 
           {promptUx==='freeform' && (
             <div>
-              <textarea value={freeform} onChange={e=>setFreeform(e.target.value)}
+              <textarea
+                value={freeform}
+                onChange={(e)=>{
+                  setFreeform(e.target.value);
+                  // Editing prompt implies a custom template.
+                  if (customTemplate) setTemplate(customTemplate);
+                }}
                 placeholder='Example: James walks through a modern staged living room, stops, turns to camera and says "This 3-bed in Smithfield just hit market - and it will not last." Golden hour light, dolly in. @Image1 @Image2 @Image3 @Audio1 as references.'
                 style={{
                   width:'100%', minHeight:180, padding:14,
                   background: VT.bg4, border:`1px solid ${VT.line}`, borderRadius:10,
                   color: VT.text, fontFamily: VT.body, fontSize:13, lineHeight:1.55,
                   resize:'vertical', outline:'none',
-                }}/>
+                }}
+              />
               <div style={{display:'flex', gap:8, marginTop:10, flexWrap:'wrap'}}>
                 {['Add wardrobe detail','Specify lighting','Add camera move','Add dialogue','Add @Image refs'].map(t =>
                   <button key={t} style={{padding:'5px 10px', borderRadius:6, fontSize:11, background:VT.bg4, border:`1px solid ${VT.line}`, color: VT.textDim, cursor:'pointer', display:'flex', alignItems:'center', gap:5}}>
@@ -334,7 +351,11 @@ function JobNew({ nav, clients = [], creatingJob = false, onCreateJob }) {
                   <div style={{fontSize:10.5, color: VT.textMuted, letterSpacing:.8, textTransform:'uppercase', fontWeight:600, marginBottom:6}}>{f.l}</div>
                   <input
                     value={promptFields[f.l.toLowerCase()] || ""}
-                    onChange={e=>setPromptFields((prev)=>({...prev, [f.l.toLowerCase()]: e.target.value}))}
+                    onChange={(e)=>{
+                      setPromptFields((prev)=>({...prev, [f.l.toLowerCase()]: e.target.value}));
+                      // Editing prompt implies a custom template.
+                      if (customTemplate) setTemplate(customTemplate);
+                    }}
                     placeholder={f.v}
                     style={{
                     width:'100%', padding:'10px 12px',

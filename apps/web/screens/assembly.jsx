@@ -13,9 +13,9 @@ function Assembly({ nav, jobId, jobs = [], clients = [], onAssemble, actingOnJob
   const [music, setMusic] = useStateAss('marble-morning');
   const [seamType, setSeamType] = useStateAss("crossfade");
   const [rotationPolicy, setRotationPolicy] = useStateAss("round");
-  const [clipSpeedByIdx, setClipSpeedByIdx] = useStateAss({});
   const [clipDurationByIdx, setClipDurationByIdx] = useStateAss({});
   const [clipUrlByIdx, setClipUrlByIdx] = useStateAss({});
+  const [endCardDurationSec, setEndCardDurationSec] = useStateAss(null);
 
   if (!job || !client) {
     return <div style={{padding:'24px 28px', color:VT.textDim}}>No matching job/client found. Open Final Assembly from a selected job.</div>;
@@ -60,7 +60,6 @@ function Assembly({ nav, jobId, jobs = [], clients = [], onAssemble, actingOnJob
   useEffectAss(() => {
     let active = true;
     if (!job?.id || !api?.getJobClips) {
-      setClipSpeedByIdx({});
       setClipDurationByIdx({});
       setClipUrlByIdx({});
       return undefined;
@@ -69,25 +68,20 @@ function Assembly({ nav, jobId, jobs = [], clients = [], onAssemble, actingOnJob
       try {
         const rows = await api.getJobClips(job.id);
         if (!active) return;
-        const nextSpeed = {};
         const nextDuration = {};
         const nextUrl = {};
         (rows || []).forEach((row) => {
           const idx = Number(row?.clip);
           if (!idx) return;
-          const speed = Number(row?.audio_speed || 0);
-          if (speed > 0) nextSpeed[idx] = speed;
           const durationSec = Number(row?.duration_sec || 0);
           if (durationSec > 0) nextDuration[idx] = durationSec;
           const direct = row?.output_local_url ? `${apiBase}${row.output_local_url}` : toOutputUrl(row?.output_path);
           if (direct) nextUrl[idx] = direct;
         });
-        setClipSpeedByIdx(nextSpeed);
         setClipDurationByIdx(nextDuration);
         setClipUrlByIdx(nextUrl);
       } catch (err) {
         if (!active) return;
-        setClipSpeedByIdx({});
         setClipDurationByIdx({});
         setClipUrlByIdx({});
       }
@@ -97,6 +91,9 @@ function Assembly({ nav, jobId, jobs = [], clients = [], onAssemble, actingOnJob
       active = false;
     };
   }, [api, apiBase, job?.id]);
+  useEffectAss(() => {
+    setEndCardDurationSec(null);
+  }, [selCard]);
   const toOutputUrl = (path) => {
     if (!path || !job?.client) return null;
     const normalized = String(path).replaceAll("\\", "/");
@@ -128,6 +125,13 @@ function Assembly({ nav, jobId, jobs = [], clients = [], onAssemble, actingOnJob
   const fmtClipDuration = (idx) => {
     const sec = Number(clipDurationByIdx[idx] || 0);
     if (!sec) return "10s";
+    const rounded = Math.max(1, Math.round(sec));
+    return `${rounded}s`;
+  };
+  const fmtEndSegmentDuration = () => {
+    if (!selectedCardUrl) return "3s";
+    const sec = Number(endCardDurationSec || 0);
+    if (!Number.isFinite(sec) || sec <= 0) return "…";
     const rounded = Math.max(1, Math.round(sec));
     return `${rounded}s`;
   };
@@ -194,9 +198,6 @@ function Assembly({ nav, jobId, jobs = [], clients = [], onAssemble, actingOnJob
                   />
                 )}
                 <div style={{position:'absolute', inset:0, background:'linear-gradient(180deg, rgba(0,0,0,0.05), rgba(0,0,0,0.35))'}}/>
-                <div style={{position:'absolute', top:8, left:8, padding:'2px 6px', borderRadius:999, background:'rgba(10,12,20,0.65)', color:'#F2C97A', fontSize:10, fontFamily:VT.mono}}>
-                  {clipSpeedByIdx[1] ? `${clipSpeedByIdx[1].toFixed(2)}x` : "n/a"}
-                </div>
                 <span style={{fontSize:11, color:'#fff', fontFamily:VT.mono, position:'relative', zIndex:2}}>
                   CLIP 1 · {fmtClipDuration(1)}
                 </span>
@@ -226,9 +227,6 @@ function Assembly({ nav, jobId, jobs = [], clients = [], onAssemble, actingOnJob
                   />
                 )}
                 <div style={{position:'absolute', inset:0, background:'linear-gradient(180deg, rgba(0,0,0,0.05), rgba(0,0,0,0.35))'}}/>
-                <div style={{position:'absolute', top:8, left:8, padding:'2px 6px', borderRadius:999, background:'rgba(10,12,20,0.65)', color:'#F2C97A', fontSize:10, fontFamily:VT.mono}}>
-                  {clipSpeedByIdx[2] ? `${clipSpeedByIdx[2].toFixed(2)}x` : "n/a"}
-                </div>
                 <span style={{fontSize:11, color:'#fff', fontFamily:VT.mono, position:'relative', zIndex:2}}>
                   CLIP 2 · {fmtClipDuration(2)}
                 </span>
@@ -259,16 +257,41 @@ function Assembly({ nav, jobId, jobs = [], clients = [], onAssemble, actingOnJob
                     />
                   )}
                   <div style={{position:'absolute', inset:0, background:'linear-gradient(180deg, rgba(0,0,0,0.05), rgba(0,0,0,0.35))'}}/>
-                  <div style={{position:'absolute', top:8, left:8, padding:'2px 6px', borderRadius:999, background:'rgba(10,12,20,0.65)', color:'#F2C97A', fontSize:10, fontFamily:VT.mono}}>
-                    {clipSpeedByIdx[3] ? `${clipSpeedByIdx[3].toFixed(2)}x` : "n/a"}
-                  </div>
                   <span style={{fontSize:11, color:'#fff', fontFamily:VT.mono, position:'relative', zIndex:2}}>
                     CLIP 3 · {fmtClipDuration(3)}
                   </span>
                 </div>
               </>}
-              <div style={{flex:'3', background:'linear-gradient(135deg, #2A1950, #1A1010)', position:'relative', display:'flex', alignItems:'flex-end', padding:8, border:'1px solid rgba(232,184,96,0.3)'}}>
-                <span style={{fontSize:11, color:'#E8B860', fontFamily:VT.mono}}>END · 3s</span>
+              <div style={{
+                flex:'3',
+                background: selectedCardUrl ? `linear-gradient(120deg, ${job.thumb}30, #1A1010)` : 'linear-gradient(135deg, #2A1950, #1A1010)',
+                position:'relative',
+                display:'flex',
+                alignItems:'flex-end',
+                padding:8,
+                border:'1px solid rgba(232,184,96,0.3)',
+                overflow:'hidden',
+              }}>
+                {selectedCardUrl && (
+                  <video
+                    key={selectedCardUrl}
+                    src={selectedCardUrl}
+                    muted
+                    preload="metadata"
+                    onLoadedMetadata={(e)=>{
+                      const dur = Number(e.currentTarget.duration || 0);
+                      if (Number.isFinite(dur) && dur > 0.25) {
+                        setEndCardDurationSec(dur);
+                        e.currentTarget.currentTime = Math.min(dur * 0.55, 3.0);
+                      }
+                    }}
+                    style={{position:'absolute', inset:0, width:'100%', height:'100%', objectFit:'cover'}}
+                  />
+                )}
+                <div style={{position:'absolute', inset:0, background:'linear-gradient(180deg, rgba(0,0,0,0.05), rgba(0,0,0,0.4))'}}/>
+                <span style={{fontSize:11, color:'#E8B860', fontFamily:VT.mono, position:'relative', zIndex:2}}>
+                  END · {fmtEndSegmentDuration()}
+                </span>
               </div>
             </div>
           </div>

@@ -370,47 +370,60 @@ function AssetsVault({ nav, clientSlug, clients = [] }) {
         </Btn>
       </div>
       <Panel pad={16}>
+      <div style={{display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:12}}>
       {videoRows.map((video) =>
         <div
           key={video.file}
           onClick={()=>setSelectedVideos((prev)=>prev.includes(video.file)?prev.filter((n)=>n!==video.file):[...prev,video.file])}
-          style={{
-            display:'flex', alignItems:'center', gap:14, padding:14, background: VT.bg4, borderRadius:10, marginBottom:10,
-            border:selectedVideos.includes(video.file)?'1px solid #F06571':'1px solid transparent', cursor:'pointer'
-          }}
+          style={{cursor:'pointer'}}
         >
-          <div style={{width:40, height:40, borderRadius:20, background:'rgba(91,191,255,0.15)', display:'flex', alignItems:'center', justifyContent:'center'}}>
-            <IC.play width={16} height={16} style={{color:'#5BBFFF'}}/>
-          </div>
-          <div style={{flex:1}}>
-            <div style={{fontSize:13, fontWeight:600, color:VT.text}}>{video.file} <Pill tone="brand" small>@Video{video.index || "?"}</Pill></div>
+        <Panel
+          pad={0}
+          style={{overflow:'hidden', border:selectedVideos.includes(video.file)?'1px solid #F06571':'1px solid transparent'}}
+        >
+          <div style={{aspectRatio:'1', background:`linear-gradient(140deg, ${client.color}30, ${client.color}12 60%, #0A0B0F)`, position:'relative'}}>
             <video
               controls
               preload="metadata"
               src={`${apiBase}${video.local_url}`}
-              style={{marginTop:10, width:'100%', maxHeight:180, borderRadius:8}}
+              style={{width:'100%', height:'100%', objectFit:'cover'}}
               onClick={(e)=>e.stopPropagation()}
             />
+            <div style={{position:'absolute', top:8, left:8}}><Pill tone="brand" small>@Video{video.index || "?"}</Pill></div>
+            {selectedVideos.includes(video.file) && <div style={{position:'absolute', top:8, right:8}}><Pill tone="danger" small>Selected</Pill></div>}
           </div>
-          <Pill tone="success" small>indexed</Pill>
+          <div style={{padding:12}}>
+            <div style={{fontSize:12, fontWeight:600, color:VT.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{video.file}</div>
+            <div style={{fontSize:10.5, color:VT.textMuted, fontFamily:VT.mono, marginTop:3}}>local video asset</div>
+          </div>
+        </Panel>
         </div>
       )}
       <div
         onClick={()=>videoInputRef.current?.click()}
-        style={{
-          display:'flex', alignItems:'center', gap:14, padding:14, background: VT.bg4, borderRadius:10, marginBottom:10,
-          border:'1px dashed rgba(181,124,248,0.35)', cursor:'pointer'
-        }}
+        style={{cursor:'pointer'}}
       >
-        <div style={{width:40, height:40, borderRadius:20, background:'rgba(181,124,248,0.14)', display:'flex', alignItems:'center', justifyContent:'center'}}>
-          <IC.upload width={16} height={16} style={{color:'#B57CF8'}}/>
-        </div>
-        <div style={{flex:1}}>
-          <div style={{fontSize:13, fontWeight:600, color:VT.text}}>{uploading ? "Uploading..." : "Add video"}</div>
-          <div style={{fontSize:11, color:VT.textMuted, marginTop:4}}>Upload mp4/mov/webm</div>
-        </div>
+        <Panel
+          pad={0}
+          style={{
+            overflow:'hidden',
+            border:'1px dashed rgba(181,124,248,0.35)',
+            background:'linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.02))',
+          }}
+        >
+          <div style={{aspectRatio:'1', display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:8}}>
+            <div style={{width:34, height:34, borderRadius:17, background:'rgba(181,124,248,0.14)', display:'flex', alignItems:'center', justifyContent:'center'}}>
+              <IC.upload width={14} height={14} style={{color:'#B57CF8'}}/>
+            </div>
+            <div style={{textAlign:'center'}}>
+              <div style={{fontSize:12.5, fontWeight:600, color:VT.text}}>{uploading ? "Uploading..." : "Add video"}</div>
+              <div style={{fontSize:11, color:VT.textMuted, marginTop:3}}>Drag or sync from Drive</div>
+            </div>
+          </div>
+        </Panel>
       </div>
-      {!loading && videoRows.length===0 && <div style={{fontSize:12, color:VT.textMuted}}>No videos found for this client.</div>}
+      {!loading && videoRows.length===0 && <Panel pad={16}><div style={{fontSize:12, color:VT.textMuted}}>No videos found for this client.</div></Panel>}
+      </div>
       </Panel>
     </>}
 
@@ -581,8 +594,12 @@ function EndCardPool({ nav, clientSlug }) {
   const [loading, setLoading] = useStateR(false);
   const [error, setError] = useStateR("");
   const [uploading, setUploading] = useStateR(false);
+  const [generating, setGenerating] = useStateR(false);
+  const [showUploadDialog, setShowUploadDialog] = useStateR(false);
   const [pendingTitle, setPendingTitle] = useStateR("");
+  const [pendingFile, setPendingFile] = useStateR(null);
   const fileInputRef = useRefR(null);
+  const brandingJsonInputRef = useRefR(null);
   const api = window.VTApi?.Api;
   const apiBase = api?.base || "";
 
@@ -610,30 +627,38 @@ function EndCardPool({ nav, clientSlug }) {
     };
   }, [client?.slug]);
 
-  const startUpload = () => {
-    const title = window.prompt("End card title (used as filename)", pendingTitle || "");
-    if (title === null) return;
-    const cleanTitle = String(title).trim();
+  const uploadEndCard = async (title, file) => {
+    if (!file || !client?.slug || !api?.uploadEndCard) return;
+    const cleanTitle = String(title || "").trim();
     if (!cleanTitle) {
       setError("Title is required to upload an end card.");
       return;
     }
-    setPendingTitle(cleanTitle);
-    fileInputRef.current?.click();
-  };
-
-  const uploadEndCard = async (file) => {
-    if (!file || !client?.slug || !api?.uploadEndCard) return;
     setUploading(true);
     try {
-      await api.uploadEndCard(client.slug, pendingTitle, file);
+      await api.uploadEndCard(client.slug, cleanTitle, file);
       await loadEndCards({ current: true });
       setError("");
+      setShowUploadDialog(false);
+      setPendingTitle("");
+      setPendingFile(null);
     } catch (err) {
       setError(err.message || "Upload failed");
     } finally {
       setUploading(false);
     }
+  };
+
+  const openUploadDialog = () => {
+    setError("");
+    setShowUploadDialog(true);
+  };
+
+  const closeUploadDialog = () => {
+    if (uploading) return;
+    setShowUploadDialog(false);
+    setPendingTitle("");
+    setPendingFile(null);
   };
 
   const deleteEndCard = async (fileName) => {
@@ -650,6 +675,20 @@ function EndCardPool({ nav, clientSlug }) {
     }
   };
 
+  const generateEndCardFromSelectedJson = async (jsonFile) => {
+    if (!jsonFile || !client?.slug || !api?.generateEndCardFromJson) return;
+    setGenerating(true);
+    setError("");
+    try {
+      await api.generateEndCardFromJson(client.slug, jsonFile);
+      await loadEndCards({ current: true });
+    } catch (err) {
+      setError(err.message || "End card generation failed");
+    } finally {
+      setGenerating(false);
+    }
+  };
+
   return <div style={{padding:'20px 28px', maxWidth:1480, margin:'0 auto'}}>
     <div style={{display:'flex', alignItems:'center', gap:14, marginBottom:20}}>
       <Btn variant="subtle" onClick={()=>nav('assets', clientSlug)}><IC.chev width={16} height={16} style={{transform:'rotate(180deg)'}}/> Back</Btn>
@@ -660,7 +699,25 @@ function EndCardPool({ nav, clientSlug }) {
         <div style={{fontSize:12, color:VT.textDim, marginTop:2}}>{client.name} · {cards.length} cards · rotates with each video</div>
       </div>
       <div style={{marginLeft:'auto'}}>
-        <Btn variant="primary" icon="plus" onClick={startUpload} disabled={uploading}>{uploading ? "Uploading..." : "New end card"}</Btn>
+        <Btn
+          variant="primary"
+          icon="plus"
+          onClick={()=>brandingJsonInputRef.current?.click()}
+          disabled={uploading || generating || loading}
+        >
+          {generating ? "Generating..." : "New end card"}
+        </Btn>
+        <input
+          ref={brandingJsonInputRef}
+          type="file"
+          accept=".json,application/json"
+          style={{display:'none'}}
+          onChange={(e)=>{
+            const jsonFile = e.target.files?.[0];
+            e.currentTarget.value = "";
+            if (jsonFile) generateEndCardFromSelectedJson(jsonFile);
+          }}
+        />
         <input
           ref={fileInputRef}
           type="file"
@@ -669,53 +726,139 @@ function EndCardPool({ nav, clientSlug }) {
           onChange={(e)=>{
             const file = e.target.files?.[0];
             e.currentTarget.value = "";
-            if (file) uploadEndCard(file);
+            if (file) setPendingFile(file);
           }}
         />
       </div>
     </div>
     {(loading || error) && <div style={{marginBottom:12, fontSize:12, color:error?'#F06571':VT.textMuted}}>{loading ? "Loading end cards..." : error}</div>}
 
-    <div style={{display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:14}}>
+    <div style={{display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:12}}>
       {cards.map(c =>
         <Panel key={c.id} pad={0} style={{overflow:'hidden'}}>
-          {/* End card preview (3s) */}
-          <div style={{aspectRatio:'9/16', background: '#000', position:'relative', overflow:'hidden', borderBottom:`1px solid ${VT.line}`}}>
+          <div style={{aspectRatio:'1', background:`linear-gradient(140deg, ${client.color}30, ${client.color}12 60%, #0A0B0F)`, position:'relative', overflow:'hidden'}}>
             <video
               src={`${apiBase}${c.local_url}`}
-              controls
               preload="metadata"
+              muted
+              loop
+              playsInline
+              controls
               style={{width:'100%', height:'100%', objectFit:'cover'}}
             />
-            <div style={{position:'absolute', top:8, right:8}}><Pill tone="gold" small>3s</Pill></div>
+            <div style={{position:'absolute', top:8, left:8}}><Pill tone="gold" small>@EndCard</Pill></div>
+            <button
+              onClick={()=>deleteEndCard(c.file)}
+              style={{
+                position:'absolute',
+                top:8,
+                right:8,
+                background:'rgba(12,14,20,0.75)',
+                border:`1px solid ${VT.line}`,
+                borderRadius:999,
+                color:VT.textMuted,
+                cursor:'pointer',
+                width:24,
+                height:24,
+                display:'flex',
+                alignItems:'center',
+                justifyContent:'center',
+                padding:0,
+              }}
+            >
+              <IC.x width={12} height={12}/>
+            </button>
           </div>
 
-          <div style={{padding:14}}>
-            <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:6}}>
-              <div style={{fontSize:13, fontWeight:600, color:VT.text}}>{c.title}</div>
-              <button onClick={()=>deleteEndCard(c.file)} style={{background:'none', border:'none', color:VT.textMuted, cursor:'pointer', padding:0}}>
-                <IC.x width={14} height={14}/>
-              </button>
-            </div>
-            <div style={{fontSize:10.5, color:VT.textMuted, fontFamily:VT.mono, marginBottom:10}}>{c.file}</div>
+          <div style={{padding:12}}>
+            <div style={{fontSize:12, fontWeight:600, color:VT.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{c.title}</div>
+            <div style={{fontSize:10.5, color:VT.textMuted, fontFamily:VT.mono, marginTop:3, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{c.file}</div>
           </div>
         </Panel>
       )}
-      {/* New */}
-      <Panel pad={14} onClick={startUpload} style={{border:`1px dashed ${VT.lineHi}`, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:10, minHeight:300, cursor:'pointer'}}>
-        <div style={{width:50, height:50, borderRadius:25, background:'rgba(232,184,96,0.1)', display:'flex', alignItems:'center', justifyContent:'center'}}>
-          <IC.plus width={20} height={20} style={{color:'#E8B860'}}/>
-        </div>
-        <div style={{fontSize:13, fontWeight:600, color:VT.text}}>Upload new end card</div>
-        <div style={{fontSize:11, color:VT.textMuted, textAlign:'center', maxWidth:180, lineHeight:1.4}}>Filename will be created from the title you provide.</div>
-      </Panel>
+      <div onClick={openUploadDialog} style={{cursor:'pointer'}}>
+        <Panel
+          pad={0}
+          style={{
+            overflow:'hidden',
+            border:'1px dashed rgba(181,124,248,0.35)',
+            background:'linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.02))',
+          }}
+        >
+          <div style={{aspectRatio:'1', display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:8}}>
+            <div style={{width:34, height:34, borderRadius:17, background:'rgba(181,124,248,0.14)', display:'flex', alignItems:'center', justifyContent:'center'}}>
+              <IC.upload width={14} height={14} style={{color:'#B57CF8'}}/>
+            </div>
+            <div style={{textAlign:'center'}}>
+              <div style={{fontSize:12.5, fontWeight:600, color:VT.text}}>Upload end card</div>
+              <div style={{fontSize:11, color:VT.textMuted, marginTop:3}}>Use your own video file</div>
+            </div>
+          </div>
+        </Panel>
+      </div>
     </div>
+    {showUploadDialog && (
+      <div style={{position:'fixed', inset:0, background:'rgba(5,8,14,0.6)', zIndex:720, display:'flex', alignItems:'center', justifyContent:'center', padding:16}}>
+        <div style={{width:'100%', maxWidth:560, background:VT.bg2, border:`1px solid ${VT.lineHi}`, borderRadius:12, padding:16, boxShadow:'0 24px 60px rgba(0,0,0,0.45)'}}>
+          <div style={{fontSize:14, fontWeight:700, color:VT.text}}>Upload end card</div>
+          <div style={{marginTop:8, fontSize:12, color:VT.textDim}}>Enter a title and choose one short video file for this end card.</div>
+
+          <div style={{marginTop:14}}>
+            <div style={{fontSize:10.5, color:VT.textMuted, letterSpacing:.8, textTransform:'uppercase', fontWeight:600, marginBottom:6}}>Title</div>
+            <input
+              value={pendingTitle}
+              onChange={(e)=>setPendingTitle(e.target.value)}
+              placeholder="End card title"
+              style={{width:'100%', padding:'9px 10px', background:VT.bg3, border:`1px solid ${VT.line}`, borderRadius:8, color:VT.text, fontSize:12, outline:'none'}}
+            />
+          </div>
+
+          <div style={{marginTop:12}}>
+            <div style={{fontSize:10.5, color:VT.textMuted, letterSpacing:.8, textTransform:'uppercase', fontWeight:600, marginBottom:6}}>Video file</div>
+            <div
+              onClick={()=>fileInputRef.current?.click()}
+              onDragOver={(e)=>{ e.preventDefault(); }}
+              onDrop={(e)=>{
+                e.preventDefault();
+                e.stopPropagation();
+                const file = e.dataTransfer?.files?.[0];
+                if (file) setPendingFile(file);
+              }}
+              style={{border:'1px dashed rgba(181,124,248,0.35)', background:'rgba(181,124,248,0.06)', borderRadius:10, minHeight:130, display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:8, cursor:'pointer'}}
+            >
+              <div style={{width:34, height:34, borderRadius:17, background:'rgba(181,124,248,0.14)', display:'flex', alignItems:'center', justifyContent:'center'}}>
+                <IC.upload width={14} height={14} style={{color:'#B57CF8'}}/>
+              </div>
+              <div style={{fontSize:12, color:VT.text, fontWeight:600}}>
+                {pendingFile ? pendingFile.name : "Drag & drop video here"}
+              </div>
+              <div style={{fontSize:11, color:VT.textMuted}}>
+                {pendingFile ? "Click to choose another file" : "or click to browse (.mp4, .mov, .m4v, .webm)"}
+              </div>
+            </div>
+          </div>
+
+          <div style={{display:'flex', justifyContent:'flex-end', gap:8, marginTop:16}}>
+            <Btn variant="ghost" onClick={closeUploadDialog} disabled={uploading}>Cancel</Btn>
+            <Btn
+              variant="primary"
+              icon="upload"
+              onClick={()=>uploadEndCard(pendingTitle, pendingFile)}
+              disabled={uploading || !pendingFile || !String(pendingTitle || "").trim()}
+            >
+              {uploading ? "Uploading..." : "Upload end card"}
+            </Btn>
+          </div>
+        </div>
+      </div>
+    )}
   </div>;
 }
 
 // ── HISTORY ─────────────────────────────────────────────
 function History({ nav, jobs = [], clients = [], loading = false }) {
   const [statusFilter, setStatusFilter] = useStateR('all');
+  const [collapsedByClient, setCollapsedByClient] = useStateR({});
   const rows = (statusFilter==='all' ? jobs : jobs.filter(j=>j.status===statusFilter)).slice().sort((a, b) => {
     const ta = Date.parse(a.created_at || a.createdAt || "");
     const tb = Date.parse(b.created_at || b.createdAt || "");
@@ -735,6 +878,13 @@ function History({ nav, jobs = [], clients = [], loading = false }) {
     const cb = clients.find((cl) => cl.slug === b)?.name || b;
     return ca.localeCompare(cb);
   });
+  const isCollapsed = (clientSlug) => collapsedByClient[clientSlug] ?? true;
+  const toggleCollapsed = (clientSlug) => {
+    setCollapsedByClient((prev) => ({
+      ...prev,
+      [clientSlug]: !(prev[clientSlug] ?? true),
+    }));
+  };
 
   return <div style={{padding:'24px 28px', maxWidth:1480, margin:'0 auto'}}>
     <div style={{display:'flex', alignItems:'flex-end', justifyContent:'space-between', marginBottom:20}}>
@@ -769,11 +919,16 @@ function History({ nav, jobs = [], clients = [], loading = false }) {
       </div>
       {clientGroups.map(([clientSlug, clientJobs]) => {
         const groupClient = clients.find((cl) => cl.slug === clientSlug) || { name: clientSlug, initials: "??", color: "#9B5CF6" };
+        const collapsed = isCollapsed(clientSlug);
         return <div key={clientSlug}>
-          <div style={{padding:'10px 20px', borderBottom:`1px solid ${VT.line}`, background:'rgba(255,255,255,0.02)', fontSize:11, color:VT.textMuted, letterSpacing:1, textTransform:'uppercase', fontWeight:600}}>
-            {groupClient.name} · {clientJobs.length} job{clientJobs.length===1?'':'s'}
+          <div
+            onClick={() => toggleCollapsed(clientSlug)}
+            style={{padding:'10px 20px', borderBottom:`1px solid ${VT.line}`, background:'rgba(255,255,255,0.02)', fontSize:11, color:VT.textMuted, letterSpacing:1, textTransform:'uppercase', fontWeight:600, display:'flex', alignItems:'center', justifyContent:'space-between', cursor:'pointer'}}
+          >
+            <span>{groupClient.name} · {clientJobs.length} job{clientJobs.length===1?'':'s'}</span>
+            <IC.chev width={13} height={13} style={{color:VT.textMuted, transform: collapsed ? 'rotate(0deg)' : 'rotate(90deg)', transition:'transform .15s ease'}}/>
           </div>
-          {clientJobs.map(j => {
+          {!collapsed && clientJobs.map(j => {
             const c = clients.find(cl=>cl.slug===j.client) || { name: j.client, initials: "??", color: "#9B5CF6" };
             const isQueuedForAssembly = j.status === "queued" || j.status === "awaiting_assembly" || j.stage === "assembly_review";
             const isDelivered = j.status === "done" || j.status === "delivered";

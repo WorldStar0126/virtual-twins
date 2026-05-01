@@ -30,6 +30,7 @@ function ClipApprove({ nav, jobId, jobs = [], clients = [], onApproval, onRegene
   const [playing, setPlaying] = useStateA(false);
   const [progress, setProgress] = useStateA(42);
   const [note, setNote] = useStateA('');
+  const [continueWithLastFrame, setContinueWithLastFrame] = useStateA(false);
   const [events, setEvents] = useStateA([]);
   const [dirClips, setDirClips] = useStateA([]);
   const [error, setError] = useStateA("");
@@ -235,7 +236,10 @@ function ClipApprove({ nav, jobId, jobs = [], clients = [], onApproval, onRegene
               if (!onApproval) return;
               try {
                 setError("");
-                const updated = await onApproval(job.id, true, note);
+                const nextClipMode = continueWithLastFrame
+                  ? "generate_next_clip_related_to_before_clip_last_frame"
+                  : "continue_without_this_clip";
+                const updated = await onApproval(job.id, true, note, nextClipMode);
                 if (updated.status === "queued" || updated.status === "awaiting_assembly" || updated.status === "done") nav("assembly", updated.id);
                 else nav("clip-approve", updated.id);
               } catch (err) {
@@ -284,6 +288,32 @@ function ClipApprove({ nav, jobId, jobs = [], clients = [], onApproval, onRegene
               }
             }} disabled={disableRejectStop}>Reject & stop</Btn>
           </div>
+          {!isFinalClip && (
+            <label style={{
+              display:'flex',
+              alignItems:'center',
+              gap:10,
+              width:'100%',
+              marginBottom:14,
+              padding:'10px 12px',
+              background:VT.bg4,
+              border:`1px solid ${VT.line}`,
+              borderRadius:8,
+              cursor:disableDecisionActions ? 'not-allowed' : 'pointer',
+              opacity:disableDecisionActions ? 0.7 : 1,
+            }}>
+              <input
+                type="checkbox"
+                checked={continueWithLastFrame}
+                onChange={(e)=>setContinueWithLastFrame(e.target.checked)}
+                disabled={disableDecisionActions}
+                style={{width:14, height:14}}
+              />
+              <span style={{fontSize:12, color:VT.text}}>
+                Continue with the last frame of the previous clip
+              </span>
+            </label>
+          )}
           {error && <div style={{fontSize:12, color:'#F06571', marginBottom:10}}>{error}</div>}
 
           <div>

@@ -145,6 +145,40 @@ const Api = {
       clearTimeout(timeoutId);
     }
   },
+  generateEndCard: (clientSlug) =>
+    request(`/v1/clients/${clientSlug}/end-cards/generate`, {
+      method: "POST",
+    }),
+  generateEndCardFromJson: async (clientSlug, jsonFile) => {
+    const form = new FormData();
+    form.append("branding_file", jsonFile);
+    const controller = new AbortController();
+    const timeoutMs = Number(localStorage.getItem("vt_api_timeout_ms") || 30000);
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(`${VT_API_BASE}/v1/clients/${clientSlug}/end-cards/generate`, {
+        method: "POST",
+        body: form,
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        let detail = `HTTP ${res.status}`;
+        try {
+          const payload = await res.json();
+          detail = formatApiErrorDetail(payload?.detail ?? payload?.message, detail);
+        } catch (err) {}
+        throw new Error(detail);
+      }
+      return res.json();
+    } catch (err) {
+      if (err?.name === "AbortError") {
+        throw new Error(`API timeout after ${timeoutMs}ms at ${VT_API_BASE}`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  },
   deleteClientAsset: async (clientSlug, assetType, fileName = "") => {
     const params = new URLSearchParams({ asset_type: assetType });
     if (fileName) params.set("file_name", fileName);
@@ -155,10 +189,10 @@ const Api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  approveClip: (jobId, approved, note = "") =>
+  approveClip: (jobId, approved, note = "", nextClipMode = "continue_without_this_clip") =>
     request(`/v1/jobs/${jobId}/approval`, {
       method: "POST",
-      body: JSON.stringify({ approved, note }),
+      body: JSON.stringify({ approved, note, next_clip_mode: nextClipMode }),
     }),
   regenerateClip1: (jobId) =>
     request(`/v1/jobs/${jobId}/regenerate-clip-1`, {
@@ -240,10 +274,10 @@ function useOperatorData(pollMs = 5000) {
     }
   }, []);
 
-  const approveJob = useCallbackApi(async (jobId, approved, note = "") => {
+  const approveJob = useCallbackApi(async (jobId, approved, note = "", nextClipMode = "continue_without_this_clip") => {
     setActingOnJob(true);
     try {
-      const updated = normalizeJob(await Api.approveClip(jobId, approved, note));
+      const updated = normalizeJob(await Api.approveClip(jobId, approved, note, nextClipMode));
       setJobs((prev) => prev.map((j) => (j.id === jobId ? updated : j)));
       setConnected(true);
       return updated;
